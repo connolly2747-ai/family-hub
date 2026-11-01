@@ -1,6 +1,7 @@
 // Data layer: one interface, two backends (Supabase for production, local demo for offline/testing).
 import { SUPABASE_URL, SUPABASE_KEY, FAMILY_EMAIL } from "./config.js";
 
+const newToken = () => Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join("");
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : "id-" + Math.random().toString(36).slice(2) + Date.now());
 
 /* ---------------- Supabase backend ---------------- */
@@ -17,20 +18,25 @@ async function supabaseBackend() {
     },
     async signOut() { await sb.auth.signOut(); },
     async load() {
-      const [members, events, rsvps, replies, done] = await Promise.all([
+      const [members, events, rsvps, replies, done, items, polls, votes, tokens] = await Promise.all([
         sb.from("members").select("*").order("sort"),
         sb.from("events").select("*").order("start_at"),
         sb.from("rsvps").select("*"),
         sb.from("replies").select("*").order("created_at"),
         sb.from("chore_done").select("*"),
+        sb.from("list_items").select("*").order("created_at"),
+        sb.from("polls").select("*").order("created_at", { ascending: false }),
+        sb.from("votes").select("*"),
+        sb.from("feed_tokens").select("*"),
       ]);
-      return { members: must(members), events: must(events), rsvps: must(rsvps), replies: must(replies), done: must(done) };
+      return { members: must(members), events: must(events), rsvps: must(rsvps), replies: must(replies), done: must(done),
+        items: must(items), polls: must(polls), votes: must(votes), tokens: must(tokens) };
     },
     subscribe(cb) {
       let t;
       const ping = () => { clearTimeout(t); t = setTimeout(cb, 250); };
       const ch = sb.channel("family-hub");
-      for (const table of ["events", "rsvps", "replies", "chore_done", "members"])
+      for (const table of ["events", "rsvps", "replies", "chore_done", "members", "list_items", "polls", "votes"])
         ch.on("postgres_changes", { event: "*", schema: "public", table }, ping);
       ch.subscribe();
       return () => sb.removeChannel(ch);
@@ -47,6 +53,18 @@ async function supabaseBackend() {
       if (!member_id) must(await sb.from("chore_done").delete().match({ event_id, on_date }));
       else must(await sb.from("chore_done").upsert({ event_id, on_date, member_id }));
     },
+    async addItem(list_name, text, added_by) { must(await sb.from("list_items").insert({ list_name, text, added_by })); },
+    async setItemDone(id, done, by) { must(await sb.from("list_items").update({ done, done_by: done ? by : null }).eq("id", id)); },
+    async deleteItem(id) { must(await sb.from("list_items").delete().eq("id", id)); },
+    async clearDone(list_name) { must(await sb.from("list_items").delete().match({ list_name, done: true })); },
+    async createPoll(question, options, created_by) { must(await sb.from("polls").insert({ question, options, created_by })); },
+    async vote(poll_id, member_id, idx) {
+      if (idx === null) must(await sb.from("votes").delete().match({ poll_id, member_id }));
+      else must(await sb.from("votes").upsert({ poll_id, member_id, option_idx: idx }));
+    },
+    async setPollClosed(id, closed) { must(await sb.from("polls").update({ closed }).eq("id", id)); },
+    async deletePoll(id) { must(await sb.from("polls").delete().eq("id", id)); },
+    async resetToken(member_id) { const token = newToken(); must(await sb.from("feed_tokens").update({ token }).eq("member_id", member_id)); },
   };
 }
 
@@ -57,7 +75,9 @@ function demoBackend() {
     .map(([id, name, color], i) => ({ id, name, color, sort: i + 1 }));
   let db;
   try { db = JSON.parse(localStorage.getItem(KEY)); } catch { db = null; }
-  if (!db) db = { events: [], rsvps: [], replies: [], done: [] };
+  if (!db) db = {};
+  for (const k of ["events", "rsvps", "replies", "done", "items", "polls", "votes", "tokens"]) db[k] = db[k] || [];
+  if (!db.tokens.length) db.tokens = members.map((m) => ({ member_id: m.id, token: newToken() }));
   const listeners = new Set();
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch {} listeners.forEach((f) => f()); };
   return {
@@ -73,6 +93,15 @@ function demoBackend() {
     async addReply(event_id, member_id, body) { db.replies.push({ id: uuid(), event_id, member_id, body, created_at: new Date().toISOString() }); save(); },
     async deleteReply(id) { db.replies = db.replies.filter((r) => r.id !== id); save(); },
     async setDone(event_id, on_date, member_id) { db.done = db.done.filter((r) => !(r.event_id === event_id && r.on_date === on_date)); if (member_id) db.done.push({ event_id, on_date, member_id }); save(); },
+    async addItem(list_name, text, added_by) { db.items.push({ id: uuid(), list_name, text, done: false, added_by, done_by: null, created_at: new Date().toISOString() }); save(); },
+    async setItemDone(id, done, by) { const i = db.items.find((x) => x.id === id); if (i) { i.done = done; i.done_by = done ? by : null; } save(); },
+    async deleteItem(id) { db.items = db.items.filter((x) => x.id !== id); save(); },
+    async clearDone(list_name) { db.items = db.items.filter((x) => !(x.list_name === list_name && x.done)); save(); },
+    async createPoll(question, options, created_by) { db.polls.unshift({ id: uuid(), question, options, created_by, closed: false, created_at: new Date().toISOString() }); save(); },
+    async vote(poll_id, member_id, idx) { db.votes = db.votes.filter((v) => !(v.poll_id === poll_id && v.member_id === member_id)); if (idx !== null) db.votes.push({ poll_id, member_id, option_idx: idx }); save(); },
+    async setPollClosed(id, closed) { const p = db.polls.find((x) => x.id === id); if (p) p.closed = closed; save(); },
+    async deletePoll(id) { db.polls = db.polls.filter((x) => x.id !== id); db.votes = db.votes.filter((v) => v.poll_id !== id); save(); },
+    async resetToken(member_id) { const t = db.tokens.find((x) => x.member_id === member_id); if (t) t.token = newToken(); save(); },
   };
 }
 

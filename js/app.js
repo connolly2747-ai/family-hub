@@ -8,9 +8,9 @@ const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { r
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 function toast(msg, action) { const t = document.getElementById("toast"); t.innerHTML = esc(msg) + (action ? ` <button class="sm" data-a="${action.a}" style="margin-left:8px">${esc(action.label)}</button>` : ""); t.classList.add("show"); t.style.pointerEvents = action ? "auto" : "none"; clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), action ? 7000 : 2600); }
 
-let api, data = { members: [], events: [], rsvps: [], replies: [], done: [] };
+let api, data = { members: [], events: [], rsvps: [], replies: [], done: [], items: [], polls: [], votes: [], tokens: [] };
 const S = {
-  authed: false, loaded: false, filtersOpen: false, view: (typeof innerWidth !== "undefined" && innerWidth < 700 ? "agenda" : "month"), cursor: startOfDay(new Date()), sel: startOfDay(new Date()),
+  authed: false, loaded: false, filtersOpen: false, list: "Groceries", view: (typeof innerWidth !== "undefined" && innerWidth < 700 ? "agenda" : "month"), cursor: startOfDay(new Date()), sel: startOfDay(new Date()),
   me: lsGet("fh.me", ""), person: "", cats: new Set(), modal: null, loginErr: "",
 };
 const member = (id) => data.members.find((m) => m.id === id);
@@ -58,6 +58,7 @@ function render() {
   if (!S.me) return renderWho();
   const m = member(S.me), n = filterCount();
   const keep = document.getElementById("quickIn"); const qv = keep ? keep.value : "";
+  const cal = ["agenda", "week", "month"].includes(S.view);
   $app.innerHTML = `
   <div class="wrap">
     <header class="top">
@@ -66,20 +67,22 @@ function render() {
         <button data-a="view" data-v="agenda" class="${S.view === "agenda" ? "on" : ""}">Agenda</button>
         <button data-a="view" data-v="week" class="${S.view === "week" ? "on" : ""}">Week</button>
         <button data-a="view" data-v="month" class="${S.view === "month" ? "on" : ""}">Month</button>
-        <button data-a="signout" class="ghost sm">Sign out</button>
+        <button data-a="view" data-v="lists" class="${S.view === "lists" ? "on" : ""}">Lists</button>
+        <button data-a="view" data-v="polls" class="${S.view === "polls" ? "on" : ""}">Polls</button>
+        <button data-a="menu" class="ghost" aria-label="More">⋯</button>
       </div>
     </header>
     <div class="layout">
-      <aside class="side ${S.filtersOpen ? "open" : ""}">${filtersHtml()}</aside>
+      ${cal ? `<aside class="side ${S.filtersOpen ? "open" : ""}">${filtersHtml()}</aside>` : `<aside class="side nofilter"></aside>`}
       <section class="main">
-        <form id="quick" class="row quick" style="flex-wrap:nowrap"><input id="quickIn" placeholder="Quick add: “Dinner Fri 6pm”, “Liam work tomorrow 4pm”" autocomplete="off" value="${esc(qv)}"><button class="primary" type="submit">Add</button></form>
-        <div class="row spread" style="margin:10px 0"><button class="filterbtn" data-a="filters">${S.filtersOpen ? "Hide filters" : "Filter" + (n ? ` (${n})` : "")}</button>
-          ${n ? `<span class="muted">Showing ${S.person ? esc(mname(S.person)) + "'s" : "everyone's"} ${S.cats.size ? [...S.cats].map((k) => catOf(k).label.toLowerCase()).join(", ") : "events"}</span>` : `<span></span>`}</div>
-        ${S.view === "month" ? monthView() : S.view === "week" ? weekView() : agendaView()}
+        ${cal ? `<form id="quick" class="row quick" style="flex-wrap:nowrap"><input id="quickIn" placeholder="Quick add: “Dinner Fri 6pm”, “Liam work tomorrow 4pm”" autocomplete="off" value="${esc(qv)}"><button class="primary" type="submit">Add</button></form>` : ""}
+        ${cal ? `<div class="row spread" style="margin:10px 0"><button class="filterbtn" data-a="filters">${S.filtersOpen ? "Hide filters" : "Filter" + (n ? ` (${n})` : "")}</button>
+          ${n ? `<span class="muted">Showing ${S.person ? esc(mname(S.person)) + "'s" : "everyone's"} ${S.cats.size ? [...S.cats].map((k) => catOf(k).label.toLowerCase()).join(", ") : "events"}</span>` : `<span></span>`}</div>` : ""}
+        ${S.view === "month" ? monthView() : S.view === "week" ? weekView() : S.view === "lists" ? listsView() : S.view === "polls" ? pollsView() : agendaView()}
       </section>
     </div>
   </div>
-  <button class="primary fab" data-a="new" aria-label="Add event">+ Add</button>`;
+  ${cal ? `<button class="primary fab" data-a="new" aria-label="Add event">+ Add</button>` : ""}`;
   if (keep && qv) { const el = document.getElementById("quickIn"); el.value = qv; }
 }
 
@@ -135,7 +138,8 @@ function weekView() {
     <h2>${start.toLocaleDateString([], { month: "short", day: "numeric" })} – ${addDays(start, 6).toLocaleDateString([], { month: "short", day: "numeric" })}</h2></div><div class="weekgrid">${cols}</div>`;
 }
 
-function agendaView() {
+function agendaView() { return needsReplyHtml() + glanceHtml() + agendaBody(); }
+function agendaBody() {
   const from = startOfDay(new Date()), to = endOfDay(addDays(from, 90));
   const occs = occsInRange(from, to);
   if (!occs.length) return `<div class="card"><h3>Nothing coming up</h3><p class="muted">Tap “+ Add”, or type in the quick-add box above, to put the first thing on the calendar.</p></div>`;
@@ -183,6 +187,112 @@ function parseQuick(text) {
       return named.length ? named : ["work", "school", "away", "appointment"].includes(category) ? [S.me] : []; })() };
 }
 
+/* ---------------- "at a glance", reply-needed, lists, polls ---------------- */
+const GLANCE = { work: "💼", school: "🎓", away: "✈️", trip: "🧳", appointment: "🩺" };
+function occsAll(from, to) { const all = []; for (const e of data.events) all.push(...occurrences(e, from, to)); return all.sort((a, b) => a.start - b.start); }
+
+function needsReplyHtml() {
+  const from = startOfDay(new Date()), to = endOfDay(addDays(from, 30));
+  const need = occsAll(from, to).filter((o) => o.e.rsvp_enabled && invited(o.e).includes(S.me) && !rsvpsFor(o).some((r) => r.member_id === S.me));
+  if (!need.length) return "";
+  return `<div class="card attn" style="margin-bottom:10px"><h3>${need.length} ${need.length === 1 ? "event needs" : "events need"} your reply</h3>
+    ${need.slice(0, 4).map((o) => itemRow(o, true)).join("")}${need.length > 4 ? `<div class="muted">+${need.length - 4} more in the agenda</div>` : ""}</div>`;
+}
+
+function glanceHtml() {
+  const from = startOfDay(new Date()), days = [0, 1, 2, 3, 4, 5, 6].map((i) => addDays(from, i));
+  const occs = occsAll(from, endOfDay(days[6])).filter((o) => GLANCE[o.e.category]);
+  if (!occs.length) return "";
+  const head = days.map((d) => `<th class="${isToday(dayKey(d)) ? "today" : ""}">${d.toLocaleDateString([], { weekday: "narrow" })}<div class="muted">${d.getDate()}</div></th>`).join("");
+  const rows = data.members.map((m) => {
+    const cells = days.map((d) => {
+      const hit = occs.filter((o) => occursOn(o, d) && (() => { const who = assignedTo(o); return who.length ? who.includes(m.id) : ["away", "trip"].includes(o.e.category); })());
+      const icons = [...new Set(hit.map((o) => GLANCE[o.e.category]))].join("");
+      const tip = hit.map((o) => `${o.e.title} (${o.e.all_day ? "all day" : o.start.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })})`).join("; ");
+      return `<td title="${esc(tip)}">${icons || `<span class="muted">·</span>`}</td>`;
+    }).join("");
+    return `<tr><th class="who"><span class="pdot" style="background:${m.color}"></span>${esc(m.name)}</th>${cells}</tr>`;
+  }).join("");
+  return `<div class="card" style="margin-bottom:10px"><h3>This week at a glance</h3><div class="muted" style="margin-bottom:6px">💼 work · 🎓 school · ✈️ away · 🧳 trip · 🩺 appointment</div>
+    <div class="glance"><table><thead><tr><th></th>${head}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+
+const LIST_DEFAULTS = ["Groceries", "To-do", "Packing"];
+function listsView() {
+  const names = [...new Set([...LIST_DEFAULTS, ...data.items.map((i) => i.list_name), S.list])];
+  const items = data.items.filter((i) => i.list_name === S.list).sort((a, b) => Number(a.done) - Number(b.done) || new Date(a.created_at) - new Date(b.created_at));
+  const nd = items.filter((i) => i.done).length;
+  return `<div class="chips" style="margin-bottom:10px">${names.map((n) => `<span class="chip ${n === S.list ? "on" : ""}" data-a="listsel" data-id="${esc(n)}">${esc(n)} <span class="muted">${data.items.filter((i) => i.list_name === n && !i.done).length || ""}</span></span>`).join("")}</div>
+  <div class="card"><form id="itemForm" class="row" style="flex-wrap:nowrap"><input id="itemIn" maxlength="200" placeholder="Add to ${esc(S.list)}…" autocomplete="off" required><button class="primary" type="submit">Add</button></form>
+    <div style="margin-top:8px">${items.length ? items.map((i) => `<div class="item li ${i.done ? "dn" : ""}"><button class="sm ck" data-a="itemdone" data-id="${i.id}" aria-label="${i.done ? "Uncheck" : "Check"}">${i.done ? "✓" : ""}</button>
+      <div class="t">${esc(i.text)}<div class="muted">${esc(mname(i.added_by))}${i.done && i.done_by ? " · done by " + esc(mname(i.done_by)) : ""}</div></div><button class="ghost sm" data-a="itemdel" data-id="${i.id}" aria-label="Remove">✕</button></div>`).join("") : `<p class="muted">Nothing here yet. Everyone sees changes instantly.</p>`}</div>
+    ${nd ? `<div class="row" style="margin-top:8px"><button class="sm" data-a="clearlist">Clear ${nd} checked</button></div>` : ""}</div>
+  <form id="newListForm" class="row" style="margin-top:12px;flex-wrap:nowrap"><input id="newListIn" maxlength="40" placeholder="New list (e.g. Costco, Trip to Maine)" autocomplete="off"><button type="submit">Create</button></form>`;
+}
+
+function pollsView() {
+  const pollCards = data.polls.map((p) => {
+    const vs = data.votes.filter((v) => v.poll_id === p.id), mine = vs.find((v) => v.member_id === S.me), total = vs.length || 1;
+    return `<div class="card" style="margin-top:10px"><div class="row spread"><b>${esc(p.question)}</b>${p.closed ? `<span class="pill">closed</span>` : ""}</div>
+      <div class="muted">asked by ${esc(mname(p.created_by))} · ${vs.length} ${vs.length === 1 ? "vote" : "votes"}</div>
+      ${p.options.map((o, i) => { const c = vs.filter((v) => v.option_idx === i); return `<button class="opt ${mine && mine.option_idx === i ? "mine" : ""}" ${p.closed ? "disabled" : ""} data-a="vote" data-id="${p.id}" data-i="${i}">
+        <span class="fill" style="width:${Math.round((c.length / total) * 100)}%"></span><span class="lbl">${esc(o)}</span><span class="cnt">${c.length}${c.length ? " · " + c.map((v) => esc(mname(v.member_id))).join(", ") : ""}</span></button>`; }).join("")}
+      <div class="row" style="margin-top:8px"><button class="sm" data-a="closepoll" data-id="${p.id}">${p.closed ? "Reopen" : "Close poll"}</button><button class="sm" data-a="delpoll" data-id="${p.id}">Delete</button></div></div>`;
+  }).join("");
+  return `<div class="card"><h3>Ask the family</h3><form id="pollForm" class="stack" style="margin-top:8px"><input id="pq" maxlength="200" placeholder="Question, e.g. Which night for Christmas dinner?" required>
+    <textarea id="po" rows="3" placeholder="One option per line (2 to 10)" required></textarea><button class="primary" type="submit">Create poll</button></form></div>${pollCards || `<p class="muted" style="margin-top:10px">No polls yet.</p>`}`;
+}
+
+/* ---------------- calendar sync, add-to-calendar, export ---------------- */
+const myToken = () => (data.tokens.find((t) => t.member_id === S.me) || {}).token || "";
+function feedUrls() {
+  const base = location.origin + "/api/ics?token=" + myToken(), host = location.host;
+  return { https: base, all: base + "&scope=all", webcal: "webcal://" + host + "/api/ics?token=" + myToken() };
+}
+function openSync() {
+  const u = feedUrls(), demo = api.name === "demo", enc = encodeURIComponent;
+  const row = (label, url, key) => `<div class="stack" style="margin-top:12px"><b>${label}</b>
+    <div class="row" style="flex-wrap:nowrap"><input readonly value="${esc(url)}" onclick="this.select()"><button data-a="copy" data-url="${esc(url)}">Copy</button></div>
+    <div class="row"><a class="btnlink" target="_blank" rel="noopener" href="https://calendar.google.com/calendar/r?cid=${enc(url.replace(/^https:/, "webcal:"))}">Add to Google Calendar</a>
+      <a class="btnlink" target="_blank" rel="noopener" href="https://outlook.live.com/calendar/0/addfromweb?url=${enc(url)}&name=${enc(key)}">Add to Outlook</a>
+      <a class="btnlink" href="${esc(url.replace(/^https:/, "webcal:"))}">Apple / other</a></div></div>`;
+  const d = showModal(`<div class="row spread"><h2>Sync with your calendar</h2><button class="ghost sm" data-a="close">✕</button></div>
+    <p class="muted">Your calendar app will show Family Hub events and add reminders (1 hour before, and 1 day before for dinners and trips). It's read-only: add and change events here.</p>
+    ${demo ? `<p class="err">Demo mode: the calendar feed only works on the real site.</p>` : ""}
+    ${row("Just my events (mine + whole-family)", u.https, "Family Hub (me)")}${row("Everyone's events", u.all, "Family Hub (everyone)")}
+    <p class="muted" style="margin-top:12px">Updates take time to appear: Outlook checks every few hours, Google can take up to a day. This link is private, so don't post it publicly. If it leaks, reset it and the old link stops working.</p>
+    <div class="row" style="margin-top:8px;justify-content:space-between"><button class="sm" data-a="resetlink">Reset my link</button><button data-a="close">Done</button></div>`);
+  d.dataset.kind = "sync";
+}
+function openMenu() {
+  const d = showModal(`<div class="row spread"><h2>More</h2><button class="ghost sm" data-a="close">✕</button></div>
+    <div class="stack" style="margin-top:10px"><button data-a="sync">📅 Sync with Google / Outlook / Apple calendar</button><button data-a="export">💾 Export everything (backup)</button>
+    <button data-a="switch">👤 Switch person</button><button data-a="signout">Sign out</button></div>`);
+  d.dataset.kind = "menu";
+}
+function exportData() {
+  const { tokens, ...rest } = data;
+  const blob = new Blob([JSON.stringify({ exported_at: new Date().toISOString(), ...rest }, null, 2)], { type: "application/json" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `family-hub-backup-${dayKey(new Date())}.json`; document.body.appendChild(a); a.click(); a.remove();
+  toast("Backup downloaded");
+}
+const gDate = (d) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+function calLinks(o) {
+  const e = o.e, enc = encodeURIComponent, notes = (e.notes || "") + "\n(From Family Hub)";
+  let gDates, oStart, oEnd, allday = "";
+  if (e.all_day) { const ed = addDays(startOfDay(o.end), 1); gDates = `${dayKey(o.start).replace(/-/g, "")}/${dayKey(ed).replace(/-/g, "")}`; oStart = dayKey(o.start); oEnd = dayKey(ed); allday = "&allday=true"; }
+  else { gDates = `${gDate(o.start)}/${gDate(o.end)}`; oStart = o.start.toISOString(); oEnd = o.end.toISOString(); }
+  const google = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${enc(e.title)}&dates=${gDates}&details=${enc(notes)}&location=${enc(e.place || "")}`;
+  const outlook = `https://outlook.live.com/calendar/0/deeplink/compose?path=%2Fcalendar%2Faction%2Fcompose&rru=addevent&subject=${enc(e.title)}&startdt=${enc(oStart)}&enddt=${enc(oEnd)}&body=${enc(notes)}&location=${enc(e.place || "")}${allday}`;
+  return { google, outlook };
+}
+function downloadIcs(o) {
+  const e = o.e, f = (d) => gDate(d), esc2 = (t) => String(t || "").replace(/\\/g, "\\\\").replace(/;/g, "\;").replace(/,/g, "\\,").replace(/\n/g, "\\n");
+  const dt = e.all_day ? [`DTSTART;VALUE=DATE:${dayKey(o.start).replace(/-/g, "")}`, `DTEND;VALUE=DATE:${dayKey(addDays(startOfDay(o.end), 1)).replace(/-/g, "")}`] : [`DTSTART:${f(o.start)}`, `DTEND:${f(o.end)}`];
+  const txt = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Family Hub//EN", "BEGIN:VEVENT", `UID:${e.id}-${o.k}@familyhub`, `DTSTAMP:${f(new Date())}`, ...dt, `SUMMARY:${esc2(e.title)}`, e.place ? `LOCATION:${esc2(e.place)}` : "", `DESCRIPTION:${esc2(e.notes)}`, "END:VEVENT", "END:VCALENDAR"].filter(Boolean).join("\r\n") + "\r\n";
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([txt], { type: "text/calendar" })); a.download = e.title.replace(/[^\w]+/g, "-").slice(0, 40) + ".ics"; document.body.appendChild(a); a.click(); a.remove();
+}
+
 /* ---------------- RSVP / chore helpers ---------------- */
 const rsvpsFor = (o) => data.rsvps.filter((r) => r.event_id === o.e.id && r.on_date === o.key);
 const doneFor = (o) => data.done.find((d) => d.event_id === o.e.id && d.on_date === o.key);
@@ -226,6 +336,7 @@ function drawDetail() {
         ${replies.map((r) => `<div class="reply"><b>${esc(mname(r.member_id))}</b> <span class="muted">${new Date(r.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
            ${r.member_id === S.me ? `<button class="ghost sm" data-a="delreply" data-id="${r.id}">delete</button>` : ""}<div>${esc(r.body)}</div></div>`).join("") || `<div class="muted">No replies yet.</div>`}
         <form id="replyForm" class="row" style="margin-top:8px;flex-wrap:nowrap"><input id="replyBody" placeholder="Write a reply…" maxlength="1000" required><button class="primary" type="submit">Send</button></form></div>` : ""}
+    <div style="margin-top:14px"><div class="muted">Add to your calendar</div><div class="row"><a class="btnlink" target="_blank" rel="noopener" href="${calLinks(o).google}">Google</a><a class="btnlink" target="_blank" rel="noopener" href="${calLinks(o).outlook}">Outlook</a><button class="sm" data-a="icsdl">Apple / .ics file</button></div></div>
     <div class="row" style="margin-top:16px;justify-content:flex-end"><button data-a="edit">Edit</button><button data-a="delete">Delete</button></div>`;
   const open = document.querySelector("dialog[open]");
   if (open && open.dataset.kind === "detail") { const keep = open.querySelector("#replyBody"); const v = keep ? keep.value : ""; open.innerHTML = body; const nb = open.querySelector("#replyBody"); if (nb) nb.value = v; }
@@ -279,8 +390,21 @@ document.addEventListener("click", async (ev) => {
     case "person": S.person = el.dataset.id; render(); break;
     case "cat": S.cats.has(el.dataset.id) ? S.cats.delete(el.dataset.id) : S.cats.add(el.dataset.id); render(); break;
         case "iam": S.me = el.dataset.id; lsSet("fh.me", S.me); render(); break;
-    case "switch": S.me = ""; lsSet("fh.me", ""); render(); break;
-    case "signout": await api.signOut(); S.authed = false; render(); break;
+    case "switch": closeModal(); S.me = ""; lsSet("fh.me", ""); render(); break;
+    case "signout": closeModal(); await api.signOut(); S.authed = false; render(); break;
+    case "menu": openMenu(); break;
+    case "sync": openSync(); break;
+    case "export": exportData(); break;
+    case "copy": try { await navigator.clipboard.writeText(el.dataset.url); toast("Link copied"); } catch { toast("Press and hold the link to copy it"); } break;
+    case "resetlink": if (confirm("Reset your calendar link? The old link will stop working.")) guarded(async () => { await api.resetToken(S.me); await refresh(); openSync(); toast("New link created. Re-add it to your calendar."); }); break;
+    case "icsdl": { const m = S.modal; const e = data.events.find((x) => x.id === m.id); const o = occurrences(e, parseKey(m.key), endOfDay(parseKey(m.key))).find((x) => x.k === m.k); if (o) downloadIcs(o); break; }
+    case "listsel": S.list = el.dataset.id; render(); break;
+    case "itemdone": { const it = data.items.find((x) => x.id === el.dataset.id); guarded(async () => { await api.setItemDone(it.id, !it.done, S.me); await refresh(); }); break; }
+    case "itemdel": guarded(async () => { await api.deleteItem(el.dataset.id); await refresh(); }); break;
+    case "clearlist": guarded(async () => { await api.clearDone(S.list); await refresh(); toast("Cleared"); }); break;
+    case "vote": { const mine = data.votes.find((v) => v.poll_id === el.dataset.id && v.member_id === S.me); const i = Number(el.dataset.i); guarded(async () => { await api.vote(el.dataset.id, S.me, mine && mine.option_idx === i ? null : i); await refresh(); }); break; }
+    case "closepoll": { const p = data.polls.find((x) => x.id === el.dataset.id); guarded(async () => { await api.setPollClosed(p.id, !p.closed); await refresh(); }); break; }
+    case "delpoll": if (confirm("Delete this poll?")) guarded(async () => { await api.deletePoll(el.dataset.id); await refresh(); }); break;
     case "new": openForm(null); break;
     case "open": ev.stopPropagation(); openDetail(el.dataset.id, el.dataset.key || el.dataset.k, el.dataset.n); break;
     case "close": closeModal(); break;
@@ -312,6 +436,13 @@ document.addEventListener("change", (ev) => {
 
 document.addEventListener("submit", async (ev) => {
   ev.preventDefault();
+  if (ev.target.id === "itemForm") { const inp = document.getElementById("itemIn"), t = inp.value.trim(); if (!t) return; inp.value = ""; guarded(async () => { await api.addItem(S.list, t, S.me); await refresh(); }); return; }
+  if (ev.target.id === "newListForm") { const n = document.getElementById("newListIn").value.trim(); if (!n) return; S.list = n; document.getElementById("newListIn").value = ""; render(); document.getElementById("itemIn")?.focus(); return; }
+  if (ev.target.id === "pollForm") {
+    const q = document.getElementById("pq").value.trim(), opts = document.getElementById("po").value.split("\n").map((x) => x.trim()).filter(Boolean).slice(0, 10);
+    if (opts.length < 2) { toast("Add at least two options, one per line"); return; }
+    guarded(async () => { await api.createPoll(q, opts, S.me); await refresh(); toast("Poll created"); }); return;
+  }
   if (ev.target.id === "quick") {
     const txt = document.getElementById("quickIn").value.trim(); if (!txt) return;
     document.getElementById("quickIn").value = ""; const q = parseQuick(txt); S.sel = new Date(q.start_at); openForm(null, q); return;

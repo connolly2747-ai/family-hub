@@ -17,3 +17,7 @@ create table public.replies (id uuid primary key default gen_random_uuid(), even
   member_id text not null references public.members(id), body text not null check (length(body) between 1 and 1000), created_at timestamptz not null default now());
 create table public.chore_done (event_id uuid references public.events(id) on delete cascade, on_date date, member_id text not null references public.members(id), primary key (event_id, on_date));
 -- RLS: policy "family_all" on each table limits access to the shared family account; see migrations in Supabase.
+
+-- Phase 2 additions (applied as migrations): feed_tokens (per-person secret calendar tokens), list_items, polls, votes,
+-- plus RPCs feed_events(p_token) [anon-callable, token is the only credential] and ping() [keep-alive].
+-- Every new table has the same "family_all" RLS policy as above.

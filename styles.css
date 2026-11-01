@@ -92,3 +92,25 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   .wrap{padding-bottom:90px}
 }
 a{color:var(--accent)}
+
+/* ---- lists, polls, glance, sync ---- */
+.attn{border-color:var(--maybe)}
+.glance{overflow-x:auto}
+.glance table{border-collapse:collapse;width:100%;font-size:.95rem}
+.glance th,.glance td{padding:5px 4px;text-align:center;border-top:1px solid var(--line);white-space:nowrap}
+.glance thead th{border-top:0;font-weight:600;font-size:.8rem}
+.glance th.who{text-align:left;font-weight:500;padding-right:10px}
+.glance th.today{color:var(--accent)}
+.side.nofilter{display:none!important}
+.layout:has(.side.nofilter){display:block}
+.li{align-items:center;cursor:default}
+.li.dn .t{text-decoration:line-through;opacity:.55}
+.ck{width:30px;height:30px;min-height:30px;padding:0;border-radius:8px;flex:none}
+.li.dn .ck{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.opt{position:relative;display:flex;justify-content:space-between;gap:10px;width:100%;margin-top:6px;text-align:left;overflow:hidden;padding:9px 12px}
+.opt .fill{position:absolute;left:0;top:0;bottom:0;background:color-mix(in srgb,var(--accent) 22%,transparent);z-index:0}
+.opt .lbl,.opt .cnt{position:relative;z-index:1}.opt .cnt{font-size:.82rem;color:var(--muted);text-align:right}
+.opt.mine{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+a.btnlink{display:inline-block;border:1px solid var(--line);border-radius:10px;padding:6px 12px;text-decoration:none;background:var(--card);font-size:.9rem}
+a.btnlink:hover{border-color:var(--accent)}
+@media(max-width:600px){.tabs{gap:4px}.tabs button{padding:6px 8px;font-size:.9rem}}
