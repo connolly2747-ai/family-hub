@@ -52,3 +52,43 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 #toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:99px;font-size:.9rem;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90%}
 #toast.show{opacity:1}
 .fab{position:fixed;right:16px;bottom:16px;box-shadow:0 4px 14px rgba(0,0,0,.25);border-radius:99px;padding:12px 18px;z-index:5}
+
+/* ---- layout: sidebar on desktop, collapsible filters on phones ---- */
+.layout{display:block}
+.side{display:none;margin-bottom:10px}
+.side.open{display:block}
+.filterbtn{display:inline-block}
+.chip{padding:5px 12px}
+.chip.big{font-size:1.05rem;padding:9px 18px}
+.quick input{flex:1;width:auto}
+.pdot{display:inline-block;width:.55em;height:.55em;border-radius:50%;margin-right:3px;vertical-align:baseline}
+.cdots{display:none}
+.item.sm{padding:6px 0}
+.item.sm .t{font-size:.9rem}
+.weekgrid{display:grid;grid-template-columns:1fr;gap:8px}
+.daycol{padding:10px}
+.daycol.today{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.dhead{margin-bottom:4px}
+#toast button{background:transparent;color:inherit;border-color:currentColor}
+@media(min-width:900px){
+  .wrap{max-width:1180px}
+  .layout{display:grid;grid-template-columns:260px minmax(0,1fr);gap:18px;align-items:start}
+  .side{display:block;position:sticky;top:12px;margin:0}
+  .filterbtn{display:none}
+  .weekgrid{grid-template-columns:repeat(7,minmax(0,1fr))}
+  .cell{min-height:110px}
+  .fab{right:24px;bottom:24px}
+}
+/* phones: bottom-sheet dialogs, dots instead of tiny labels, bigger tap targets */
+@media(max-width:600px){
+  dialog{margin:auto 0 0 0;width:100%;max-width:100%;border-radius:18px 18px 0 0;max-height:92%}
+  button,.chip{min-height:38px}
+  .cell{min-height:54px;padding:2px}
+  .cell .evs{display:none}
+  .cell .cdots{display:block;text-align:center;margin-top:2px;line-height:1}
+  .cell .n{display:block;margin:0 auto}
+  header.top h1{font-size:1.3rem}
+  .tabs button{padding:6px 10px}
+  .wrap{padding-bottom:90px}
+}
+a{color:var(--accent)}

@@ -6,11 +6,11 @@ const $app = document.getElementById("app");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
-function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2600); }
+function toast(msg, action) { const t = document.getElementById("toast"); t.innerHTML = esc(msg) + (action ? ` <button class="sm" data-a="${action.a}" style="margin-left:8px">${esc(action.label)}</button>` : ""); t.classList.add("show"); t.style.pointerEvents = action ? "auto" : "none"; clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), action ? 7000 : 2600); }
 
 let api, data = { members: [], events: [], rsvps: [], replies: [], done: [] };
 const S = {
-  authed: false, loaded: false, view: "month", cursor: startOfDay(new Date()), sel: startOfDay(new Date()),
+  authed: false, loaded: false, filtersOpen: false, view: (typeof innerWidth !== "undefined" && innerWidth < 700 ? "agenda" : "month"), cursor: startOfDay(new Date()), sel: startOfDay(new Date()),
   me: lsGet("fh.me", ""), person: "", cats: new Set(), modal: null, loginErr: "",
 };
 const member = (id) => data.members.find((m) => m.id === id);
@@ -34,35 +34,53 @@ function occsInRange(from, to) {
 }
 
 /* ---------------- rendering ---------------- */
+const isToday = (k) => k === dayKey(new Date());
+const dots = (ids) => ids.map((id) => `<span class="pdot" style="background:${(member(id) || {}).color || "#999"}" title="${esc(mname(id))}"></span>`).join("");
+function filterCount() { return (S.person ? 1 : 0) + S.cats.size; }
+function filtersHtml() {
+  return `<div class="card filters">
+    <div class="muted">Person</div>
+    <div class="chips" style="margin:4px 0 12px">
+      <span class="chip ${S.person === "" ? "on" : ""}" data-a="person" data-id="">Everyone</span>
+      <span class="chip ${S.person === S.me ? "on" : ""}" data-a="person" data-id="${esc(S.me)}">Just me</span>
+      ${data.members.filter((x) => x.id !== S.me).map((x) => `<span class="chip ${S.person === x.id ? "on" : ""}" data-a="person" data-id="${x.id}"><span class="dot" style="background:${x.color}"></span>${esc(x.name)}</span>`).join("")}
+    </div>
+    <div class="muted">Type</div>
+    <div class="chips" style="margin-top:4px">
+      ${Object.entries(CATEGORIES).map(([k, c]) => `<span class="chip ${S.cats.has(k) ? "on" : ""}" data-a="cat" data-id="${k}"><span class="dot" style="background:${c.color}"></span>${c.label}</span>`).join("")}
+      ${S.cats.size || S.person ? `<span class="chip" data-a="clearfilters">Clear</span>` : ""}
+    </div></div>`;
+}
+
 function render() {
   if (!S.loaded) { $app.innerHTML = `<div class="login"><p class="muted">Loading…</p></div>`; return; }
   if (!S.authed) return renderLogin();
   if (!S.me) return renderWho();
-  const m = member(S.me);
+  const m = member(S.me), n = filterCount();
+  const keep = document.getElementById("quickIn"); const qv = keep ? keep.value : "";
   $app.innerHTML = `
   <div class="wrap">
     <header class="top">
-      <div><h1>Family Hub</h1><div class="muted">Signed in as <b>${esc(m ? m.name : S.me)}</b> · <a href="#" data-a="switch">not you?</a>${api.name === "demo" ? " · <b>demo mode</b>" : ""}</div></div>
+      <div><h1>Family Hub</h1><div class="muted">Hi <b>${esc(m ? m.name : S.me)}</b> · <a href="#" data-a="switch">not you?</a>${api.name === "demo" ? " · <b>demo mode</b>" : ""}</div></div>
       <div class="row tabs">
-        <button data-a="view" data-v="month" class="${S.view === "month" ? "on" : ""}">Month</button>
         <button data-a="view" data-v="agenda" class="${S.view === "agenda" ? "on" : ""}">Agenda</button>
-        <button data-a="signout" class="ghost">Sign out</button>
+        <button data-a="view" data-v="week" class="${S.view === "week" ? "on" : ""}">Week</button>
+        <button data-a="view" data-v="month" class="${S.view === "month" ? "on" : ""}">Month</button>
+        <button data-a="signout" class="ghost sm">Sign out</button>
       </div>
     </header>
-    <div class="card" style="margin-bottom:12px">
-      <div class="chips" style="margin-bottom:8px">
-        <span class="chip ${S.person === "" ? "on" : ""}" data-a="person" data-id="">Everyone</span>
-        <span class="chip ${S.person === S.me ? "on" : ""}" data-a="person" data-id="${esc(S.me)}">Just me</span>
-        ${data.members.filter((x) => x.id !== S.me).map((x) => `<span class="chip ${S.person === x.id ? "on" : ""}" data-a="person" data-id="${x.id}"><span class="dot" style="background:${x.color}"></span>${esc(x.name)}</span>`).join("")}
-      </div>
-      <div class="chips">
-        ${Object.entries(CATEGORIES).map(([k, c]) => `<span class="chip ${S.cats.has(k) ? "on" : ""}" data-a="cat" data-id="${k}"><span class="dot" style="background:${c.color}"></span>${c.label}</span>`).join("")}
-        ${S.cats.size ? `<span class="chip" data-a="clearcats">clear</span>` : ""}
-      </div>
+    <div class="layout">
+      <aside class="side ${S.filtersOpen ? "open" : ""}">${filtersHtml()}</aside>
+      <section class="main">
+        <form id="quick" class="row quick" style="flex-wrap:nowrap"><input id="quickIn" placeholder="Quick add: “Dinner Fri 6pm”, “Liam work tomorrow 4pm”" autocomplete="off" value="${esc(qv)}"><button class="primary" type="submit">Add</button></form>
+        <div class="row spread" style="margin:10px 0"><button class="filterbtn" data-a="filters">${S.filtersOpen ? "Hide filters" : "Filter" + (n ? ` (${n})` : "")}</button>
+          ${n ? `<span class="muted">Showing ${S.person ? esc(mname(S.person)) + "'s" : "everyone's"} ${S.cats.size ? [...S.cats].map((k) => catOf(k).label.toLowerCase()).join(", ") : "events"}</span>` : `<span></span>`}</div>
+        ${S.view === "month" ? monthView() : S.view === "week" ? weekView() : agendaView()}
+      </section>
     </div>
-    ${S.view === "month" ? monthView() : agendaView()}
   </div>
-  <button class="primary fab" data-a="new">+ Add</button>`;
+  <button class="primary fab" data-a="new" aria-label="Add event">+ Add</button>`;
+  if (keep && qv) { const el = document.getElementById("quickIn"); el.value = qv; }
 }
 
 function renderLogin() {
@@ -76,54 +94,93 @@ function renderLogin() {
 }
 function renderWho() {
   $app.innerHTML = `<div class="login card stack"><h1>Who's this?</h1><p class="muted">Pick your name so events show who added them.</p>
-    <div class="chips" style="justify-content:center">${data.members.map((x) => `<span class="chip" data-a="iam" data-id="${x.id}" style="font-size:1.05rem;padding:8px 16px"><span class="dot" style="background:${x.color}"></span>${esc(x.name)}</span>`).join("")}</div></div>`;
+    <div class="chips" style="justify-content:center">${data.members.map((x) => `<span class="chip big" data-a="iam" data-id="${x.id}"><span class="dot" style="background:${x.color}"></span>${esc(x.name)}</span>`).join("")}</div></div>`;
 }
 
-function chip(o, compact) {
-  const c = catOf(o.e.category);
-  const who = assignedTo(o);
+function chip(o) {
+  const c = catOf(o.e.category), who = assignedTo(o);
   const label = o.e.category === "chore" && who.length ? `${o.e.title} · ${mname(who[0])}` : o.e.title;
-  const dn = doneFor(o) ? "✓ " : "";
-  return `<span class="ev" data-a="open" data-id="${o.e.id}" data-k="${o.key}" data-n="${o.k}" style="border-color:${c.color};background:${c.color}22" title="${esc(label)}">${dn}${c.icon} ${esc(label)}</span>`;
+  return `<span class="ev" data-a="open" data-id="${o.e.id}" data-k="${o.key}" data-n="${o.k}" style="border-color:${c.color};background:${c.color}22" title="${esc(label)}">${doneFor(o) ? "✓ " : ""}${c.icon} ${esc(label)}</span>`;
 }
 
 function monthView() {
   const first = new Date(S.cursor.getFullYear(), S.cursor.getMonth(), 1);
   const gridStart = addDays(first, -first.getDay());
-  const gridEnd = endOfDay(addDays(gridStart, 41));
-  const occs = occsInRange(gridStart, gridEnd);
-  const today = dayKey(new Date());
+  const occs = occsInRange(gridStart, endOfDay(addDays(gridStart, 41)));
   let cells = "";
   for (let i = 0; i < 42; i++) {
-    const d = addDays(gridStart, i);
+    const d = addDays(gridStart, i), k = dayKey(d);
     const list = occs.filter((o) => occursOn(o, d));
-    cells += `<div class="cell ${d.getMonth() !== first.getMonth() ? "out" : ""} ${dayKey(d) === today ? "today" : ""} ${dayKey(d) === dayKey(S.sel) ? "sel" : ""}" data-a="day" data-k="${dayKey(d)}">
-      <span class="n">${d.getDate()}</span>${list.slice(0, 3).map((o) => chip(o)).join("")}${list.length > 3 ? `<div class="more">+${list.length - 3} more</div>` : ""}</div>`;
+    cells += `<div class="cell ${d.getMonth() !== first.getMonth() ? "out" : ""} ${isToday(k) ? "today" : ""} ${k === dayKey(S.sel) ? "sel" : ""}" data-a="day" data-k="${k}">
+      <span class="n">${d.getDate()}</span>
+      <div class="evs">${list.slice(0, 3).map(chip).join("")}${list.length > 3 ? `<div class="more">+${list.length - 3} more</div>` : ""}</div>
+      <div class="cdots">${list.slice(0, 4).map((o) => `<span class="pdot" style="background:${catOf(o.e.category).color}"></span>`).join("")}</div></div>`;
   }
   const dayList = occs.filter((o) => occursOn(o, S.sel));
   return `<div class="row spread" style="margin-bottom:8px">
-      <div class="row"><button data-a="prev">‹</button><button data-a="today">Today</button><button data-a="next">›</button></div><h2>${monthLabel(first)}</h2></div>
+      <div class="row"><button data-a="prev" aria-label="Previous">‹</button><button data-a="today">Today</button><button data-a="next" aria-label="Next">›</button></div><h2>${monthLabel(first)}</h2></div>
     <div class="grid">${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => `<div class="dow">${d}</div>`).join("")}${cells}</div>
-    <div class="card" style="margin-top:12px"><h3>${dayLabel(S.sel)}</h3>${dayList.length ? dayList.map(itemRow).join("") : `<p class="muted">Nothing scheduled.</p>`}</div>`;
+    <div class="card" id="daylist" style="margin-top:12px"><h3>${isToday(dayKey(S.sel)) ? "Today · " : ""}${dayLabel(S.sel)}</h3>${dayList.length ? dayList.map((o) => itemRow(o)).join("") : `<p class="muted">Nothing scheduled. Tap “+ Add” to plan something.</p>`}</div>`;
+}
+
+function weekView() {
+  const start = addDays(S.sel, -S.sel.getDay());
+  const occs = occsInRange(start, endOfDay(addDays(start, 6)));
+  const cols = [0, 1, 2, 3, 4, 5, 6].map((i) => {
+    const d = addDays(start, i), k = dayKey(d), list = occs.filter((o) => occursOn(o, d));
+    return `<div class="card daycol ${isToday(k) ? "today" : ""}"><div class="dhead"><b>${d.toLocaleDateString([], { weekday: "short" })}</b> <span class="muted">${d.toLocaleDateString([], { month: "short", day: "numeric" })}</span></div>
+      ${list.length ? list.map((o) => itemRow(o, true)).join("") : `<div class="muted">—</div>`}</div>`;
+  }).join("");
+  return `<div class="row spread" style="margin-bottom:8px"><div class="row"><button data-a="prev" aria-label="Previous week">‹</button><button data-a="today">This week</button><button data-a="next" aria-label="Next week">›</button></div>
+    <h2>${start.toLocaleDateString([], { month: "short", day: "numeric" })} – ${addDays(start, 6).toLocaleDateString([], { month: "short", day: "numeric" })}</h2></div><div class="weekgrid">${cols}</div>`;
 }
 
 function agendaView() {
   const from = startOfDay(new Date()), to = endOfDay(addDays(from, 90));
   const occs = occsInRange(from, to);
-  if (!occs.length) return `<div class="card"><p class="muted">Nothing in the next 90 days. Tap “+ Add” to start.</p></div>`;
+  if (!occs.length) return `<div class="card"><h3>Nothing coming up</h3><p class="muted">Tap “+ Add”, or type in the quick-add box above, to put the first thing on the calendar.</p></div>`;
   const groups = new Map();
   for (const o of occs) { const k = dayKey(o.start < from ? from : o.start); (groups.get(k) || groups.set(k, []).get(k)).push(o); }
-  return [...groups].slice(0, 60).map(([k, list]) => `<div class="card" style="margin-bottom:10px"><h3>${dayLabel(parseKey(k))}</h3>${list.map(itemRow).join("")}</div>`).join("");
+  const tomorrow = dayKey(addDays(from, 1));
+  return [...groups].slice(0, 60).map(([k, list]) => `<div class="card" style="margin-bottom:10px"><h3>${k === dayKey(from) ? "Today" : k === tomorrow ? "Tomorrow" : ""}${k === dayKey(from) || k === tomorrow ? " · " : ""}${dayLabel(parseKey(k))}</h3>${list.map((o) => itemRow(o)).join("")}</div>`).join("");
 }
 
-function itemRow(o) {
-  const e = o.e, c = catOf(e.category), who = assignedTo(o);
-  const rs = rsvpsFor(o);
+function itemRow(o, compact) {
+  const e = o.e, c = catOf(e.category), who = assignedTo(o), rs = rsvpsFor(o);
+  const time = e.all_day ? "All day" : o.start.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (compact) return `<div class="item sm" data-a="open" data-id="${e.id}" data-k="${o.key}" data-n="${o.k}"><div class="bar" style="background:${c.color}"></div>
+    <div class="t"><b>${doneFor(o) ? "✓ " : ""}${esc(e.title)}</b><div class="muted">${time} ${dots(who)}</div></div></div>`;
   return `<div class="item" data-a="open" data-id="${e.id}" data-k="${o.key}" data-n="${o.k}">
     <div class="bar" style="background:${c.color}"></div>
     <div class="t"><b>${c.icon} ${esc(e.title)}</b> ${doneFor(o) ? `<span class="pill going">done</span>` : ""}
       <div class="muted">${esc(whenText(o))}${e.place ? " · " + esc(e.place) : ""}</div>
-      <div class="muted">${who.length ? "For " + who.map(mname).map(esc).join(", ") + " · " : ""}added by ${esc(mname(e.added_by))}${e.rsvp_enabled ? ` · ${rs.filter((r) => r.status === "going").length} going` : ""}</div></div></div>`;
+      <div class="muted">${who.length ? dots(who) + " " + who.map(mname).map(esc).join(", ") + " · " : "Whole family · "}added by ${esc(mname(e.added_by))}${e.rsvp_enabled ? ` · ${rs.filter((r) => r.status === "going").length} going` : ""}</div></div></div>`;
+}
+
+/* ---------------- quick add ---------------- */
+const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+function parseQuick(text) {
+  let t = " " + text.trim() + " ", date = startOfDay(new Date()), hasTime = false, h = 18, mi = 0;
+  const tm = t.match(/\s(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+  if (tm) { h = Number(tm[1]) % 12 + (tm[3].toLowerCase() === "pm" ? 12 : 0); mi = Number(tm[2] || 0); hasTime = true; t = t.replace(tm[0], " "); }
+  const dm = t.match(/\s(today|tonight|tomorrow|sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat)[a-z]*\b/i) || null;
+  if (dm) {
+    const w = dm[1].toLowerCase();
+    if (w === "tomorrow") date = addDays(date, 1);
+    else if (w !== "today" && w !== "tonight") { const want = DAYS.indexOf(w.slice(0, 3)); let diff = (want - date.getDay() + 7) % 7; date = addDays(date, diff === 0 ? 7 : diff); }
+    t = t.replace(dm[0], " ");
+  } else { const nm = t.match(/\s(\d{1,2})\/(\d{1,2})\b/); if (nm) { date = new Date(date.getFullYear(), Number(nm[1]) - 1, Number(nm[2])); t = t.replace(nm[0], " "); } }
+  const title = t.replace(/\s+/g, " ").replace(/\b(on|at)\s*$/i, "").trim();
+  const low = title.toLowerCase();
+  const category = /work|shift/.test(low) ? "work" : /dinner|lunch|breakfast|brunch|cook/.test(low) ? "meal" : /doctor|dentist|appointment|checkup|vet/.test(low) ? "appointment"
+    : /birthday|anniversary/.test(low) ? "birthday" : /trip|vacation|flight/.test(low) ? "trip" : /school|class|exam|semester|college|home from/.test(low) ? "school"
+    : /feed|trash|laundry|dishes|chore/.test(low) ? "chore" : "general";
+  const c = catOf(category);
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), h, mi);
+  return { title, category, start_at: start.toISOString(), all_day: !hasTime && ["school", "birthday", "trip"].includes(category),
+    rsvp_enabled: c.rsvp, replies_enabled: c.replies, recurrence: c.rec,
+    member_ids: (() => { const named = data.members.filter((m) => new RegExp("\\b" + m.name + "\\b", "i").test(title)).map((m) => m.id);
+      return named.length ? named : ["work", "school", "away", "appointment"].includes(category) ? [S.me] : []; })() };
 }
 
 /* ---------------- RSVP / chore helpers ---------------- */
@@ -191,9 +248,10 @@ function openForm(ev, defaults = {}) {
     <div class="grid2"><div><label>Start date</label><input type="date" id="f_sd" required value="${dayKey(d0)}"></div><div id="f_stbox" ${f.all_day ? "hidden" : ""}><label>Start time</label><input type="time" id="f_st" value="${f.start_at ? t(d0) : "18:00"}"></div>
       <div><label>End date (optional)</label><input type="date" id="f_ed" value="${d1 ? dayKey(d1) : ""}"></div><div id="f_etbox" ${f.all_day ? "hidden" : ""}><label>End time</label><input type="time" id="f_et" value="${d1 ? t(d1) : ""}"></div></div>
     <div><label>Where</label><input id="f_place" maxlength="120" value="${esc(f.place || "")}"></div>
+    <details class="more-opts" ${f.notes || (!S.modal.isNew) ? "open" : ""}><summary class="muted" style="cursor:pointer">More options (notes, RSVPs, replies)</summary><div class="stack" style="margin-top:10px">
     <div><label>Notes</label><textarea id="f_notes" rows="3" maxlength="1000">${esc(f.notes || "")}</textarea></div>
     <div class="row"><label style="display:flex;gap:6px;align-items:center;color:var(--ink);font-size:.95rem"><input type="checkbox" id="f_rsvp" style="width:auto" ${f.rsvp_enabled ? "checked" : ""}> Ask for RSVPs</label>
-      <label style="display:flex;gap:6px;align-items:center;color:var(--ink);font-size:.95rem"><input type="checkbox" id="f_rep" style="width:auto" ${f.replies_enabled ? "checked" : ""}> Allow replies</label></div>
+      <label style="display:flex;gap:6px;align-items:center;color:var(--ink);font-size:.95rem"><input type="checkbox" id="f_rep" style="width:auto" ${f.replies_enabled ? "checked" : ""}> Allow replies</label></div></div></details>
     <div class="err" id="f_err"></div>
     <div class="row" style="justify-content:flex-end"><button type="button" data-a="close">Cancel</button><button class="primary" type="submit">Save</button></div></form>`;
   const d = showModal(html); d.dataset.kind = "form";
@@ -209,14 +267,18 @@ document.addEventListener("click", async (ev) => {
   if (el.tagName === "A") ev.preventDefault();
   switch (a) {
     case "view": S.view = el.dataset.v; render(); break;
-    case "prev": S.cursor = new Date(S.cursor.getFullYear(), S.cursor.getMonth() - 1, 1); render(); break;
-    case "next": S.cursor = new Date(S.cursor.getFullYear(), S.cursor.getMonth() + 1, 1); render(); break;
+    case "prev": case "next": { const dir = a === "prev" ? -1 : 1;
+      if (S.view === "week") { S.sel = addDays(S.sel, 7 * dir); S.cursor = S.sel; }
+      else { S.cursor = new Date(S.cursor.getFullYear(), S.cursor.getMonth() + dir, 1); S.sel = S.cursor; }
+      render(); break; }
     case "today": S.cursor = startOfDay(new Date()); S.sel = startOfDay(new Date()); render(); break;
-    case "day": S.sel = parseKey(el.dataset.k); render(); break;
+    case "day": S.sel = parseKey(el.dataset.k); render(); if (innerWidth < 700) document.getElementById("daylist")?.scrollIntoView({ behavior: "smooth", block: "start" }); break;
+    case "filters": S.filtersOpen = !S.filtersOpen; render(); break;
+    case "clearfilters": S.person = ""; S.cats.clear(); render(); break;
+    case "undo": if (S.lastDeleted) { const e = S.lastDeleted; S.lastDeleted = null; guarded(async () => { await api.saveEvent(e); await refresh(); toast("Restored (RSVPs and replies weren't kept)"); }); } break;
     case "person": S.person = el.dataset.id; render(); break;
     case "cat": S.cats.has(el.dataset.id) ? S.cats.delete(el.dataset.id) : S.cats.add(el.dataset.id); render(); break;
-    case "clearcats": S.cats.clear(); render(); break;
-    case "iam": S.me = el.dataset.id; lsSet("fh.me", S.me); render(); break;
+        case "iam": S.me = el.dataset.id; lsSet("fh.me", S.me); render(); break;
     case "switch": S.me = ""; lsSet("fh.me", ""); render(); break;
     case "signout": await api.signOut(); S.authed = false; render(); break;
     case "new": openForm(null); break;
@@ -229,7 +291,7 @@ document.addEventListener("click", async (ev) => {
     case "delreply": guarded(async () => { await api.deleteReply(el.dataset.id); await refresh(); }); break;
     case "edit": { const e = data.events.find((x) => x.id === S.modal.id); closeModal(); openForm(e); break; }
     case "delete": { const e = data.events.find((x) => x.id === S.modal.id);
-      if (confirm(`Delete “${e.title}” for everyone${e.recurrence !== "none" ? " (all repeats)" : ""}?`)) guarded(async () => { await api.deleteEvent(e.id); closeModal(); await refresh(); toast("Deleted"); }); break; }
+      guarded(async () => { S.lastDeleted = JSON.parse(JSON.stringify(e)); await api.deleteEvent(e.id); closeModal(); await refresh(); toast("Event deleted", { a: "undo", label: "Undo" }); }); break; }
     case "fwho": { const f = S.modal.e; const id = el.dataset.id; f.member_ids = f.member_ids.includes(id) ? f.member_ids.filter((x) => x !== id) : [...f.member_ids, id]; el.classList.toggle("on"); break; }
     case "frot": { const f = S.modal.e; const id = el.dataset.id; f.rotation = f.rotation.includes(id) ? f.rotation.filter((x) => x !== id) : [...f.rotation, id];
       document.querySelectorAll("#f_rot .chip").forEach((c) => { const i = f.rotation.indexOf(c.dataset.id); c.classList.toggle("on", i >= 0); c.textContent = (i >= 0 ? i + 1 + ". " : "") + mname(c.dataset.id); }); break; }
@@ -250,6 +312,10 @@ document.addEventListener("change", (ev) => {
 
 document.addEventListener("submit", async (ev) => {
   ev.preventDefault();
+  if (ev.target.id === "quick") {
+    const txt = document.getElementById("quickIn").value.trim(); if (!txt) return;
+    document.getElementById("quickIn").value = ""; const q = parseQuick(txt); S.sel = new Date(q.start_at); openForm(null, q); return;
+  }
   if (ev.target.id === "loginForm") {
     const code = document.getElementById("code").value;
     try { await api.signIn(code); S.authed = true; S.loginErr = ""; await boot2(); } catch (err) { S.loginErr = err.message; renderLogin(); }
