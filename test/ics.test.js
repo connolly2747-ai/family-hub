@@ -16,6 +16,13 @@ assert.ok(clara.text.includes("Feed the cat (Clara)") && !clara.text.includes("F
 const liamWork = { id: "l", title: "Liam work", category: "work", start_at: zonedToUtc(2026, 11, 5, 16, 0).toISOString(), end_at: zonedToUtc(2026, 11, 5, 22, 0).toISOString(), all_day: false, member_ids: ["liam"], rotation: [], recurrence: "none" };
 assert.ok(!buildIcs({ events: [liamWork], members, memberId: "kevin", memberName: "Kevin", now }).text.includes("Liam work"));
 assert.ok(buildIcs({ events: [liamWork], members, memberId: "kevin", memberName: "Kevin", scope: "all", now }).text.includes("Liam work"));
+// 3b. Covers: a covered shift moves to the person covering; an open request is flagged; the requester no longer gets it.
+const choreDay = zonedToUtc(2026, 11, 4, 8, 0); // Wed Nov 4 is occurrence k=0 -> Anna
+const cov = [{ event_id: "c", on_date: "2026-11-04", requested_by: "anna", covered_by: "kevin", status: "covered" }];
+assert.ok(buildIcs({ events: [chore], members, covers: cov, memberId: "kevin", memberName: "Kevin", now }).text.includes("Feed the cat (Kevin)"));
+assert.ok(!buildIcs({ events: [chore], members, covers: cov, memberId: "anna", memberName: "Anna", now }).text.split("BEGIN:VEVENT").some((v) => v.includes("20261104T13") && v.includes("Feed the cat (Anna)")));
+const openCov = [{ event_id: "c", on_date: "2026-11-04", requested_by: "anna", covered_by: null, status: "open" }];
+assert.ok(buildIcs({ events: [chore], members, covers: openCov, memberId: "anna", memberName: "Anna", now }).text.includes("NEEDS COVER"));
 // 4. All-day multi-day range uses an exclusive DTEND; yearly birthday repeats; text is escaped and folded.
 const trip = { id: "t", title: "Anna home, from school; yay", category: "school", start_at: zonedToUtc(2026, 12, 18, 0, 0).toISOString(), end_at: zonedToUtc(2026, 12, 22, 0, 0).toISOString(), all_day: true, member_ids: [], rotation: [], recurrence: "none", notes: "x".repeat(200) };
 const out = buildIcs({ events: [trip], members, memberId: "kevin", memberName: "Kevin", now }).text;

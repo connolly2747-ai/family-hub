@@ -42,14 +42,17 @@ function expand(e, winStart, winEnd, tz = TZ) {
       start = zonedToUtc(y, m, d, 0, 0, tz); end = zonedToUtc(...endDate, 0, 0, tz);
     } else { start = zonedToUtc(y, m, d, s0.h, s0.mi, tz); end = new Date(start.getTime() + dur); }
     if (start > winEnd) break;
-    if (end >= winStart) out.push({ k, start, end, allDay: !!e.all_day, startDate, endDate });
+    if (end >= winStart) out.push({ k, start, end, allDay: !!e.all_day, startDate, endDate, dateKey: `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}` });
     if (rec === "none") break;
   }
   return out;
 }
 
-const assignee = (e, k) => (e.category === "chore" && e.rotation && e.rotation.length ? [e.rotation[k % e.rotation.length]] : e.member_ids || []);
-const relevant = (e, k, memberId) => { const who = assignee(e, k); return !who.length || who.includes(memberId); };
+function assignee(e, k, cover) {
+  const base = e.category === "chore" && e.rotation && e.rotation.length ? [e.rotation[k % e.rotation.length]] : e.member_ids || [];
+  return cover && cover.status === "covered" ? base.map((id) => (id === cover.requested_by ? cover.covered_by : id)) : base;
+}
+const relevant = (e, k, memberId, cover) => { const who = assignee(e, k, cover); return !who.length || who.includes(memberId); };
 
 const esc = (s) => String(s ?? "").replace(/\\/g, "\\\\").replace(/;/g, "\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
 const fmtUtc = (d) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
@@ -62,7 +65,7 @@ function fold(line) { // 75-octet folding
 }
 const CAT_LABEL = { general: "Event", work: "Work", school: "School", away: "Away", holiday: "Holiday", chore: "Chore", appointment: "Appointment", birthday: "Birthday", meal: "Meal", trip: "Trip" };
 
-function buildIcs({ events, members, memberId, memberName, scope = "mine", now = new Date(), tz = TZ }) {
+function buildIcs({ events, members, covers = [], memberId, memberName, scope = "mine", now = new Date(), tz = TZ }) {
   const name = (id) => (members.find((m) => m.id === id) || { name: id }).name;
   const winStart = new Date(now.getTime() - 30 * 864e5), winEnd = new Date(now.getTime() + 365 * 864e5);
   const L = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Family Hub//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
@@ -70,9 +73,10 @@ function buildIcs({ events, members, memberId, memberName, scope = "mine", now =
     "REFRESH-INTERVAL;VALUE=DURATION:PT6H", "X-PUBLISHED-TTL:PT6H"];
   let count = 0;
   for (const e of events) for (const o of expand(e, winStart, winEnd, tz)) {
-    if (scope !== "all" && !relevant(e, o.k, memberId)) continue;
-    const who = assignee(e, o.k).map(name);
-    const title = e.category === "chore" && who.length ? `${e.title} (${who[0]})` : e.title;
+    const cover = covers.find((c) => c.event_id === e.id && String(c.on_date).slice(0, 10) === o.dateKey);
+    if (scope !== "all" && !relevant(e, o.k, memberId, cover)) continue;
+    const who = assignee(e, o.k, cover).map(name);
+    const title = e.category === "chore" && who.length ? `${e.title} (${who[0]})${cover && cover.status === "open" ? " NEEDS COVER" : ""}` : e.title;
     const desc = [e.notes, who.length ? `For: ${who.join(", ")}` : "For: whole family", "Open Family Hub to RSVP or reply."].filter(Boolean).join("\n");
     L.push("BEGIN:VEVENT", `UID:${e.id}-${o.k}@familyhub`, `DTSTAMP:${fmtUtc(now)}`);
     if (o.allDay) L.push(`DTSTART;VALUE=DATE:${fmtDate(o.startDate)}`, `DTEND;VALUE=DATE:${fmtDate(o.endDate)}`);

@@ -114,3 +114,35 @@ a{color:var(--accent)}
 a.btnlink{display:inline-block;border:1px solid var(--line);border-radius:10px;padding:6px 12px;text-decoration:none;background:var(--card);font-size:.9rem}
 a.btnlink:hover{border-color:var(--accent)}
 @media(max-width:600px){.tabs{gap:4px}.tabs button{padding:6px 8px;font-size:.9rem}}
+
+/* ---- bottom navigation: full-width bar on phones, floating pill on desktop ---- */
+.layout.single{display:block!important}
+.bottomnav{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:space-around;align-items:flex-end;background:var(--card);border-top:1px solid var(--line);padding:6px 4px calc(6px + env(safe-area-inset-bottom));z-index:20}
+.bottomnav button{flex:1;border:0;background:transparent;display:flex;flex-direction:column;align-items:center;gap:1px;font-size:.72rem;color:var(--muted);min-height:50px;padding:2px 0;border-radius:12px}
+.bottomnav button.on{color:var(--accent);font-weight:600}
+.bottomnav .ic{font-size:1.35rem;line-height:1.2}
+.bottomnav .addbtn{color:var(--ink)}
+.bottomnav .addbtn .ic{background:var(--accent);color:var(--accent-ink);width:46px;height:46px;border-radius:50%;display:grid;place-items:center;font-size:1.7rem;margin-top:-20px;box-shadow:0 4px 12px rgba(0,0,0,.25);line-height:1}
+.wrap{padding-bottom:110px}
+#toast{bottom:92px}
+@media(min-width:900px){
+  .bottomnav{left:50%;right:auto;transform:translateX(-50%);bottom:18px;width:min(580px,92%);border:1px solid var(--line);border-radius:99px;box-shadow:0 8px 30px rgba(0,0,0,.2);padding:6px 14px;align-items:center}
+  .bottomnav button{flex-direction:row;justify-content:center;gap:7px;font-size:.92rem;min-height:44px}
+  .bottomnav .ic{font-size:1.15rem}
+  .bottomnav .addbtn .ic{margin-top:0;width:36px;height:36px;font-size:1.35rem;box-shadow:none}
+  #toast{bottom:84px}
+}
+.cover{border:1px solid var(--line);border-radius:10px;padding:10px;margin:10px 0;background:var(--bg)}
+.cover.warn{border-color:var(--no)}
+.cover.ok{border-color:var(--going)}
+.cover summary{cursor:pointer;color:var(--muted)}
+.attnline{margin:6px 0 10px;align-items:center}
+
+/* ---- assigned tasks ---- */
+.task{border-left:5px solid var(--line)}
+.task.prio-high{border-left-color:var(--no)}
+.task.prio-medium{border-left-color:var(--maybe)}
+.arow{padding:8px 0;border-top:1px solid var(--line);margin-top:8px}
+.overdue{color:var(--no);font-weight:600}
+.bottomnav button{min-width:0}
+@media(min-width:900px){.bottomnav{width:min(700px,94%)}}

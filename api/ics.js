@@ -15,7 +15,7 @@ module.exports = async (req, res) => {
     if (!r.ok) { res.statusCode = 502; return res.end("Calendar source unavailable"); }
     const data = await r.json();
     if (!data) { res.statusCode = 404; return res.end("Unknown or revoked calendar link"); }
-    const { text } = buildIcs({ events: data.events, members: data.members, memberId: data.member_id, memberName: data.member_name, scope: url.searchParams.get("scope") === "all" ? "all" : "mine" });
+    const { text } = buildIcs({ events: data.events, members: data.members, covers: data.covers || [], memberId: data.member_id, memberName: data.member_name, scope: url.searchParams.get("scope") === "all" ? "all" : "mine" });
     res.setHeader("Content-Type", "text/calendar; charset=utf-8");
     res.setHeader("Content-Disposition", 'inline; filename="family-hub.ics"');
     res.setHeader("Cache-Control", "public, max-age=300, s-maxage=300");

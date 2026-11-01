@@ -18,7 +18,7 @@ async function supabaseBackend() {
     },
     async signOut() { await sb.auth.signOut(); },
     async load() {
-      const [members, events, rsvps, replies, done, items, polls, votes, tokens] = await Promise.all([
+      const [members, events, rsvps, replies, done, items, polls, votes, tokens, covers, tickets, ticketVotes, tasks, taskAssignees] = await Promise.all([
         sb.from("members").select("*").order("sort"),
         sb.from("events").select("*").order("start_at"),
         sb.from("rsvps").select("*"),
@@ -28,15 +28,20 @@ async function supabaseBackend() {
         sb.from("polls").select("*").order("created_at", { ascending: false }),
         sb.from("votes").select("*"),
         sb.from("feed_tokens").select("*"),
+        sb.from("chore_cover").select("*"),
+        sb.from("tickets").select("*").order("created_at", { ascending: false }),
+        sb.from("ticket_votes").select("*"),
+        sb.from("tasks").select("*").order("created_at", { ascending: false }),
+        sb.from("task_assignees").select("*"),
       ]);
       return { members: must(members), events: must(events), rsvps: must(rsvps), replies: must(replies), done: must(done),
-        items: must(items), polls: must(polls), votes: must(votes), tokens: must(tokens) };
+        items: must(items), polls: must(polls), votes: must(votes), tokens: must(tokens), covers: must(covers), tickets: must(tickets), ticketVotes: must(ticketVotes), tasks: must(tasks), taskAssignees: must(taskAssignees) };
     },
     subscribe(cb) {
       let t;
       const ping = () => { clearTimeout(t); t = setTimeout(cb, 250); };
       const ch = sb.channel("family-hub");
-      for (const table of ["events", "rsvps", "replies", "chore_done", "members", "list_items", "polls", "votes"])
+      for (const table of ["events", "rsvps", "replies", "chore_done", "members", "list_items", "polls", "votes", "chore_cover", "tickets", "ticket_votes", "tasks", "task_assignees"])
         ch.on("postgres_changes", { event: "*", schema: "public", table }, ping);
       ch.subscribe();
       return () => sb.removeChannel(ch);
@@ -53,10 +58,27 @@ async function supabaseBackend() {
       if (!member_id) must(await sb.from("chore_done").delete().match({ event_id, on_date }));
       else must(await sb.from("chore_done").upsert({ event_id, on_date, member_id }));
     },
-    async addItem(list_name, text, added_by) { must(await sb.from("list_items").insert({ list_name, text, added_by })); },
+    async addItem(list_name, text, added_by, note) { must(await sb.from("list_items").insert({ list_name, text, added_by, note: note || null })); },
     async setItemDone(id, done, by) { must(await sb.from("list_items").update({ done, done_by: done ? by : null }).eq("id", id)); },
     async deleteItem(id) { must(await sb.from("list_items").delete().eq("id", id)); },
-    async clearDone(list_name) { must(await sb.from("list_items").delete().match({ list_name, done: true })); },
+    async clearDone(list_name) { must(await sb.from("list_items").update({ archived: true }).match({ list_name, done: true, archived: false })); },
+    async requestCover(event_id, on_date, requested_by, note) { must(await sb.from("chore_cover").insert({ event_id, on_date, requested_by, note: note || null })); },
+    async takeCover(event_id, on_date, member_id) {
+      const rows = must(await sb.from("chore_cover").update({ covered_by: member_id, status: "covered" }).match({ event_id, on_date, status: "open" }).select());
+      if (!rows.length) throw new Error("Someone else just took that shift.");
+    },
+    async releaseCover(event_id, on_date) { must(await sb.from("chore_cover").update({ covered_by: null, status: "open" }).match({ event_id, on_date })); },
+    async cancelCover(event_id, on_date) { must(await sb.from("chore_cover").delete().match({ event_id, on_date })); },
+    async createTask(task, assignees) { const row = must(await sb.from("tasks").insert(task).select().single()); must(await sb.from("task_assignees").insert(assignees.map((member_id) => ({ task_id: row.id, member_id })))); },
+    async updateTask(id, fields) { must(await sb.from("tasks").update(fields).eq("id", id)); },
+    async deleteTask(id) { must(await sb.from("tasks").delete().eq("id", id)); },
+    async setTaskStatus(task_id, member_id, status) { const now = new Date().toISOString(); const f = { status }; if (status === "seen") f.seen_at = now; if (status === "done") { f.done_at = now; } if (status !== "done") f.done_at = null; must(await sb.from("task_assignees").update(f).match({ task_id, member_id })); },
+    async requestExtension(task_id, member_id, ext_date, ext_note) { must(await sb.from("task_assignees").update({ ext_status: "pending", ext_date, ext_note: ext_note || null }).match({ task_id, member_id })); },
+    async decideExtension(task_id, member_id, approve, ext_date) { const f = approve ? { ext_status: "approved", due_override: ext_date } : { ext_status: "declined" }; must(await sb.from("task_assignees").update(f).match({ task_id, member_id })); },
+    async addTicket(t) { must(await sb.from("tickets").insert(t)); },
+    async setTicketStatus(id, status) { must(await sb.from("tickets").update({ status }).eq("id", id)); },
+    async deleteTicket(id) { must(await sb.from("tickets").delete().eq("id", id)); },
+    async ticketVote(ticket_id, member_id, on) { if (on) must(await sb.from("ticket_votes").upsert({ ticket_id, member_id })); else must(await sb.from("ticket_votes").delete().match({ ticket_id, member_id })); },
     async createPoll(question, options, created_by) { must(await sb.from("polls").insert({ question, options, created_by })); },
     async vote(poll_id, member_id, idx) {
       if (idx === null) must(await sb.from("votes").delete().match({ poll_id, member_id }));
@@ -76,7 +98,7 @@ function demoBackend() {
   let db;
   try { db = JSON.parse(localStorage.getItem(KEY)); } catch { db = null; }
   if (!db) db = {};
-  for (const k of ["events", "rsvps", "replies", "done", "items", "polls", "votes", "tokens"]) db[k] = db[k] || [];
+  for (const k of ["events", "rsvps", "replies", "done", "items", "polls", "votes", "tokens", "covers", "tickets", "ticketVotes", "tasks", "taskAssignees"]) db[k] = db[k] || [];
   if (!db.tokens.length) db.tokens = members.map((m) => ({ member_id: m.id, token: newToken() }));
   const listeners = new Set();
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch {} listeners.forEach((f) => f()); };
@@ -88,15 +110,29 @@ function demoBackend() {
     async load() { return { members, ...JSON.parse(JSON.stringify(db)) }; },
     subscribe(cb) { listeners.add(cb); return () => listeners.delete(cb); },
     async saveEvent(ev) { const i = db.events.findIndex((e) => e.id === ev.id); const row = { created_at: new Date().toISOString(), ...ev }; if (i >= 0) db.events[i] = { ...db.events[i], ...ev }; else db.events.push(row); save(); },
-    async deleteEvent(id) { db.events = db.events.filter((e) => e.id !== id); for (const k of ["rsvps", "replies", "done"]) db[k] = db[k].filter((r) => r.event_id !== id); save(); },
+    async deleteEvent(id) { db.events = db.events.filter((e) => e.id !== id); for (const k of ["rsvps", "replies", "done", "covers"]) db[k] = db[k].filter((r) => r.event_id !== id); save(); },
     async setRsvp(event_id, member_id, on_date, status) { db.rsvps = db.rsvps.filter((r) => !(r.event_id === event_id && r.member_id === member_id && r.on_date === on_date)); if (status) db.rsvps.push({ event_id, member_id, on_date, status }); save(); },
     async addReply(event_id, member_id, body) { db.replies.push({ id: uuid(), event_id, member_id, body, created_at: new Date().toISOString() }); save(); },
     async deleteReply(id) { db.replies = db.replies.filter((r) => r.id !== id); save(); },
     async setDone(event_id, on_date, member_id) { db.done = db.done.filter((r) => !(r.event_id === event_id && r.on_date === on_date)); if (member_id) db.done.push({ event_id, on_date, member_id }); save(); },
-    async addItem(list_name, text, added_by) { db.items.push({ id: uuid(), list_name, text, done: false, added_by, done_by: null, created_at: new Date().toISOString() }); save(); },
+    async addItem(list_name, text, added_by, note) { db.items.push({ id: uuid(), list_name, text, note: note || null, archived: false, done: false, added_by, done_by: null, created_at: new Date().toISOString() }); save(); },
     async setItemDone(id, done, by) { const i = db.items.find((x) => x.id === id); if (i) { i.done = done; i.done_by = done ? by : null; } save(); },
     async deleteItem(id) { db.items = db.items.filter((x) => x.id !== id); save(); },
-    async clearDone(list_name) { db.items = db.items.filter((x) => !(x.list_name === list_name && x.done)); save(); },
+    async clearDone(list_name) { db.items.forEach((x) => { if (x.list_name === list_name && x.done) x.archived = true; }); save(); },
+    async requestCover(event_id, on_date, requested_by, note) { if (db.covers.some((c) => c.event_id === event_id && c.on_date === on_date)) throw new Error("Already requested."); db.covers.push({ event_id, on_date, requested_by, covered_by: null, status: "open", note: note || null, created_at: new Date().toISOString() }); save(); },
+    async takeCover(event_id, on_date, member_id) { const c = db.covers.find((x) => x.event_id === event_id && x.on_date === on_date && x.status === "open"); if (!c) throw new Error("Someone else just took that shift."); c.covered_by = member_id; c.status = "covered"; save(); },
+    async releaseCover(event_id, on_date) { const c = db.covers.find((x) => x.event_id === event_id && x.on_date === on_date); if (c) { c.covered_by = null; c.status = "open"; } save(); },
+    async cancelCover(event_id, on_date) { db.covers = db.covers.filter((x) => !(x.event_id === event_id && x.on_date === on_date)); save(); },
+    async createTask(task, assignees) { const id = uuid(); db.tasks.unshift({ id, created_at: new Date().toISOString(), ...task }); assignees.forEach((m) => db.taskAssignees.push({ task_id: id, member_id: m, status: "assigned", seen_at: null, done_at: null, due_override: null, ext_status: null, ext_date: null, ext_note: null })); save(); },
+    async updateTask(id, fields) { const t = db.tasks.find((x) => x.id === id); if (t) Object.assign(t, fields); save(); },
+    async deleteTask(id) { db.tasks = db.tasks.filter((x) => x.id !== id); db.taskAssignees = db.taskAssignees.filter((x) => x.task_id !== id); save(); },
+    async setTaskStatus(task_id, member_id, status) { const a = db.taskAssignees.find((x) => x.task_id === task_id && x.member_id === member_id); if (!a) return; a.status = status; if (status === "seen") a.seen_at = new Date().toISOString(); a.done_at = status === "done" ? new Date().toISOString() : null; save(); },
+    async requestExtension(task_id, member_id, ext_date, ext_note) { const a = db.taskAssignees.find((x) => x.task_id === task_id && x.member_id === member_id); if (a) Object.assign(a, { ext_status: "pending", ext_date, ext_note: ext_note || null }); save(); },
+    async decideExtension(task_id, member_id, approve, ext_date) { const a = db.taskAssignees.find((x) => x.task_id === task_id && x.member_id === member_id); if (a) { if (approve) { a.ext_status = "approved"; a.due_override = ext_date; } else a.ext_status = "declined"; } save(); },
+    async addTicket(t) { db.tickets.unshift({ id: uuid(), status: "new", created_at: new Date().toISOString(), ...t }); save(); },
+    async setTicketStatus(id, status) { const t = db.tickets.find((x) => x.id === id); if (t) t.status = status; save(); },
+    async deleteTicket(id) { db.tickets = db.tickets.filter((x) => x.id !== id); db.ticketVotes = db.ticketVotes.filter((v) => v.ticket_id !== id); save(); },
+    async ticketVote(ticket_id, member_id, on) { db.ticketVotes = db.ticketVotes.filter((v) => !(v.ticket_id === ticket_id && v.member_id === member_id)); if (on) db.ticketVotes.push({ ticket_id, member_id }); save(); },
     async createPoll(question, options, created_by) { db.polls.unshift({ id: uuid(), question, options, created_by, closed: false, created_at: new Date().toISOString() }); save(); },
     async vote(poll_id, member_id, idx) { db.votes = db.votes.filter((v) => !(v.poll_id === poll_id && v.member_id === member_id)); if (idx !== null) db.votes.push({ poll_id, member_id, option_idx: idx }); save(); },
     async setPollClosed(id, closed) { const p = db.polls.find((x) => x.id === id); if (p) p.closed = closed; save(); },

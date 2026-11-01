@@ -1,4 +1,5 @@
 import { createApi, uuid } from "./api.js";
+import { ADMIN_IDS } from "./config.js";
 import { CATEGORIES, catOf } from "./categories.js";
 import { occurrences, occursOn, dayKey, parseKey, startOfDay, endOfDay, addDays, whenText, monthLabel, dayLabel } from "./dates.js";
 
@@ -8,19 +9,24 @@ const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { r
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 function toast(msg, action) { const t = document.getElementById("toast"); t.innerHTML = esc(msg) + (action ? ` <button class="sm" data-a="${action.a}" style="margin-left:8px">${esc(action.label)}</button>` : ""); t.classList.add("show"); t.style.pointerEvents = action ? "auto" : "none"; clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), action ? 7000 : 2600); }
 
-let api, data = { members: [], events: [], rsvps: [], replies: [], done: [], items: [], polls: [], votes: [], tokens: [] };
+let api, data = { members: [], events: [], rsvps: [], replies: [], done: [], items: [], polls: [], votes: [], tokens: [], covers: [], tickets: [], ticketVotes: [], tasks: [], taskAssignees: [] };
 const S = {
-  authed: false, loaded: false, filtersOpen: false, list: "Groceries", view: (typeof innerWidth !== "undefined" && innerWidth < 700 ? "agenda" : "month"), cursor: startOfDay(new Date()), sel: startOfDay(new Date()),
+  authed: false, loaded: false, filtersOpen: false, list: "Groceries", view: "home", cal: "month", wishKind: "wish", tasksTab: "mine", cursor: startOfDay(new Date()), sel: startOfDay(new Date()),
   me: lsGet("fh.me", ""), person: "", cats: new Set(), modal: null, loginErr: "",
 };
 const member = (id) => data.members.find((m) => m.id === id);
 const mname = (id) => (member(id) || { name: id }).name;
 
 /* ---------------- filtering ---------------- */
-function assignedTo(o) { // who this occurrence is for
+function baseWho(o) { // who the schedule says, before any cover
   const e = o.e;
   if (e.category === "chore" && e.rotation && e.rotation.length) return [e.rotation[o.k % e.rotation.length]];
   return e.member_ids || [];
+}
+const coverOf = (o) => data.covers.find((c) => c.event_id === o.e.id && c.on_date === o.key);
+function assignedTo(o) { // who it is for right now
+  const who = baseWho(o), c = coverOf(o);
+  return c && c.status === "covered" ? who.map((id) => (id === c.requested_by ? c.covered_by : id)) : who;
 }
 function visible(o) {
   if (S.cats.size && !S.cats.has(o.e.category)) return false;
@@ -52,39 +58,43 @@ function filtersHtml() {
     </div></div>`;
 }
 
+function bottomNav() {
+  const v = S.view, more = ["polls", "wishes"].includes(v);
+  const b = (id, ic, label, on) => `<button data-a="nav" data-v="${id}" class="${on ? "on" : ""}" ${on ? 'aria-current="page"' : ""}><span class="ic">${ic}</span><span>${label}</span></button>`;
+  return `<nav class="bottomnav" aria-label="Main">${b("home", "🏠", "Home", v === "home")}${b("calendar", "📅", "Calendar", v === "calendar")}
+    <button class="addbtn" data-a="new" aria-label="Add event"><span class="ic">＋</span><span>Add</span></button>
+    ${b("lists", "🛒", "Lists", v === "lists")}${b("tasks", "✅", "Tasks", v === "tasks")}<button data-a="menu" class="${more ? "on" : ""}"><span class="ic">⋯</span><span>More</span></button></nav>`;
+}
+
 function render() {
   if (!S.loaded) { $app.innerHTML = `<div class="login"><p class="muted">Loading…</p></div>`; return; }
   if (!S.authed) return renderLogin();
   if (!S.me) return renderWho();
   const m = member(S.me), n = filterCount();
   const keep = document.getElementById("quickIn"); const qv = keep ? keep.value : "";
-  const cal = ["agenda", "week", "month"].includes(S.view);
+  const home = S.view === "home", calv = S.view === "calendar", showQuick = home || calv;
+  const body = home ? agendaView() : calv ? calToggle() + (S.cal === "week" ? weekView() : monthView()) : S.view === "lists" ? listsView() : S.view === "tasks" ? tasksView() : S.view === "polls" ? pollsView() : wishesView();
+  const titles = { home: "Family Hub", calendar: "Calendar", lists: "Lists", tasks: "Tasks", polls: "Polls", wishes: "Feedback & wishes" };
   $app.innerHTML = `
   <div class="wrap">
     <header class="top">
-      <div><h1>Family Hub</h1><div class="muted">Hi <b>${esc(m ? m.name : S.me)}</b> · <a href="#" data-a="switch">not you?</a>${api.name === "demo" ? " · <b>demo mode</b>" : ""}</div></div>
-      <div class="row tabs">
-        <button data-a="view" data-v="agenda" class="${S.view === "agenda" ? "on" : ""}">Agenda</button>
-        <button data-a="view" data-v="week" class="${S.view === "week" ? "on" : ""}">Week</button>
-        <button data-a="view" data-v="month" class="${S.view === "month" ? "on" : ""}">Month</button>
-        <button data-a="view" data-v="lists" class="${S.view === "lists" ? "on" : ""}">Lists</button>
-        <button data-a="view" data-v="polls" class="${S.view === "polls" ? "on" : ""}">Polls</button>
-        <button data-a="menu" class="ghost" aria-label="More">⋯</button>
-      </div>
+      <div><h1>${titles[S.view] || "Family Hub"}</h1><div class="muted">Hi <b>${esc(m ? m.name : S.me)}</b> · <a href="#" data-a="switch">not you?</a>${api.name === "demo" ? " · <b>demo mode</b>" : ""}</div></div>
     </header>
-    <div class="layout">
-      ${cal ? `<aside class="side ${S.filtersOpen ? "open" : ""}">${filtersHtml()}</aside>` : `<aside class="side nofilter"></aside>`}
+    <div class="layout ${calv ? "" : "single"}">
+      ${calv ? `<aside class="side ${S.filtersOpen ? "open" : ""}">${filtersHtml()}</aside>` : ""}
       <section class="main">
-        ${cal ? `<form id="quick" class="row quick" style="flex-wrap:nowrap"><input id="quickIn" placeholder="Quick add: “Dinner Fri 6pm”, “Liam work tomorrow 4pm”" autocomplete="off" value="${esc(qv)}"><button class="primary" type="submit">Add</button></form>` : ""}
-        ${cal ? `<div class="row spread" style="margin:10px 0"><button class="filterbtn" data-a="filters">${S.filtersOpen ? "Hide filters" : "Filter" + (n ? ` (${n})` : "")}</button>
-          ${n ? `<span class="muted">Showing ${S.person ? esc(mname(S.person)) + "'s" : "everyone's"} ${S.cats.size ? [...S.cats].map((k) => catOf(k).label.toLowerCase()).join(", ") : "events"}</span>` : `<span></span>`}</div>` : ""}
-        ${S.view === "month" ? monthView() : S.view === "week" ? weekView() : S.view === "lists" ? listsView() : S.view === "polls" ? pollsView() : agendaView()}
+        ${showQuick ? `<form id="quick" class="row quick" style="flex-wrap:nowrap"><input id="quickIn" placeholder="Quick add: “Dinner Fri 6pm”, “Liam work tomorrow 4pm”" autocomplete="off" value="${esc(qv)}"><button class="primary" type="submit">Add</button></form>` : ""}
+        ${calv ? `<div class="row spread" style="margin:10px 0"><button class="filterbtn" data-a="filters">${S.filtersOpen ? "Hide filters" : "Filter" + (n ? ` (${n})` : "")}</button>
+          ${n ? `<span class="muted">Showing ${S.person ? esc(mname(S.person)) + "'s" : "everyone's"} ${S.cats.size ? [...S.cats].map((k) => catOf(k).label.toLowerCase()).join(", ") : "events"}</span>` : `<span></span>`}</div>`
+          : home && n ? `<div class="row spread attnline"><span class="muted">Filters are on (set in Calendar)</span><button class="sm" data-a="clearfilters">Clear</button></div>` : `<div style="height:10px"></div>`}
+        ${body}
       </section>
     </div>
   </div>
-  ${cal ? `<button class="primary fab" data-a="new" aria-label="Add event">+ Add</button>` : ""}`;
-  if (keep && qv) { const el = document.getElementById("quickIn"); el.value = qv; }
+  ${bottomNav()}`;
+  if (keep && qv) { const el = document.getElementById("quickIn"); if (el) el.value = qv; }
 }
+const calToggle = () => `<div class="row tabs" style="margin-bottom:10px"><button data-a="calmode" data-v="month" class="${S.cal === "month" ? "on" : ""}">Month</button><button data-a="calmode" data-v="week" class="${S.cal === "week" ? "on" : ""}">Week</button></div>`;
 
 function renderLogin() {
   $app.innerHTML = `<form class="login card stack" id="loginForm">
@@ -103,7 +113,8 @@ function renderWho() {
 function chip(o) {
   const c = catOf(o.e.category), who = assignedTo(o);
   const label = o.e.category === "chore" && who.length ? `${o.e.title} · ${mname(who[0])}` : o.e.title;
-  return `<span class="ev" data-a="open" data-id="${o.e.id}" data-k="${o.key}" data-n="${o.k}" style="border-color:${c.color};background:${c.color}22" title="${esc(label)}">${doneFor(o) ? "✓ " : ""}${c.icon} ${esc(label)}</span>`;
+  const cv = coverOf(o);
+  return `<span class="ev" data-a="open" data-id="${o.e.id}" data-k="${o.key}" data-n="${o.k}" style="border-color:${c.color};background:${c.color}22" title="${esc(label)}">${doneFor(o) ? "✓ " : ""}${cv && cv.status === "open" ? "⚠ " : ""}${c.icon} ${esc(label)}</span>`;
 }
 
 function monthView() {
@@ -138,7 +149,7 @@ function weekView() {
     <h2>${start.toLocaleDateString([], { month: "short", day: "numeric" })} – ${addDays(start, 6).toLocaleDateString([], { month: "short", day: "numeric" })}</h2></div><div class="weekgrid">${cols}</div>`;
 }
 
-function agendaView() { return needsReplyHtml() + glanceHtml() + agendaBody(); }
+function agendaView() { return homeTasksHtml() + needsCoverHtml() + needsReplyHtml() + glanceHtml() + agendaBody(); }
 function agendaBody() {
   const from = startOfDay(new Date()), to = endOfDay(addDays(from, 90));
   const occs = occsInRange(from, to);
@@ -156,7 +167,7 @@ function itemRow(o, compact) {
     <div class="t"><b>${doneFor(o) ? "✓ " : ""}${esc(e.title)}</b><div class="muted">${time} ${dots(who)}</div></div></div>`;
   return `<div class="item" data-a="open" data-id="${e.id}" data-k="${o.key}" data-n="${o.k}">
     <div class="bar" style="background:${c.color}"></div>
-    <div class="t"><b>${c.icon} ${esc(e.title)}</b> ${doneFor(o) ? `<span class="pill going">done</span>` : ""}
+    <div class="t"><b>${c.icon} ${esc(e.title)}</b> ${doneFor(o) ? `<span class="pill going">done</span>` : ""}${(() => { const cv = coverOf(o); return cv ? (cv.status === "open" ? `<span class="pill no">needs cover</span>` : `<span class="pill maybe">covered by ${esc(mname(cv.covered_by))}</span>`) : ""; })()}
       <div class="muted">${esc(whenText(o))}${e.place ? " · " + esc(e.place) : ""}</div>
       <div class="muted">${who.length ? dots(who) + " " + who.map(mname).map(esc).join(", ") + " · " : "Whole family · "}added by ${esc(mname(e.added_by))}${e.rsvp_enabled ? ` · ${rs.filter((r) => r.status === "going").length} going` : ""}</div></div></div>`;
 }
@@ -219,11 +230,12 @@ function glanceHtml() {
 
 const LIST_DEFAULTS = ["Groceries", "To-do", "Packing"];
 function listsView() {
-  const names = [...new Set([...LIST_DEFAULTS, ...data.items.map((i) => i.list_name), S.list])];
-  const items = data.items.filter((i) => i.list_name === S.list).sort((a, b) => Number(a.done) - Number(b.done) || new Date(a.created_at) - new Date(b.created_at));
+  const names = [...new Set([...LIST_DEFAULTS, ...data.items.filter((i) => !i.archived).map((i) => i.list_name), S.list])];
+  const chips = `<div class="chips" style="margin-bottom:10px">${names.map((n) => `<span class="chip ${n === S.list ? "on" : ""}" data-a="listsel" data-id="${esc(n)}">${esc(n)} <span class="muted">${data.items.filter((i) => i.list_name === n && !i.archived && !i.done).length || ""}</span></span>`).join("")}</div>`;
+  if (S.list === "Groceries") return chips + groceryBody();
+  const items = data.items.filter((i) => i.list_name === S.list && !i.archived).sort((a, b) => Number(a.done) - Number(b.done) || new Date(a.created_at) - new Date(b.created_at));
   const nd = items.filter((i) => i.done).length;
-  return `<div class="chips" style="margin-bottom:10px">${names.map((n) => `<span class="chip ${n === S.list ? "on" : ""}" data-a="listsel" data-id="${esc(n)}">${esc(n)} <span class="muted">${data.items.filter((i) => i.list_name === n && !i.done).length || ""}</span></span>`).join("")}</div>
-  <div class="card"><form id="itemForm" class="row" style="flex-wrap:nowrap"><input id="itemIn" maxlength="200" placeholder="Add to ${esc(S.list)}…" autocomplete="off" required><button class="primary" type="submit">Add</button></form>
+  return chips + `<div class="card"><form id="itemForm" class="row" style="flex-wrap:nowrap"><input id="itemIn" maxlength="200" placeholder="Add to ${esc(S.list)}…" autocomplete="off" required><button class="primary" type="submit">Add</button></form>
     <div style="margin-top:8px">${items.length ? items.map((i) => `<div class="item li ${i.done ? "dn" : ""}"><button class="sm ck" data-a="itemdone" data-id="${i.id}" aria-label="${i.done ? "Uncheck" : "Check"}">${i.done ? "✓" : ""}</button>
       <div class="t">${esc(i.text)}<div class="muted">${esc(mname(i.added_by))}${i.done && i.done_by ? " · done by " + esc(mname(i.done_by)) : ""}</div></div><button class="ghost sm" data-a="itemdel" data-id="${i.id}" aria-label="Remove">✕</button></div>`).join("") : `<p class="muted">Nothing here yet. Everyone sees changes instantly.</p>`}</div>
     ${nd ? `<div class="row" style="margin-top:8px"><button class="sm" data-a="clearlist">Clear ${nd} checked</button></div>` : ""}</div>
@@ -252,7 +264,7 @@ function feedUrls() {
 function openSync() {
   const u = feedUrls(), demo = api.name === "demo", enc = encodeURIComponent;
   const row = (label, url, key) => `<div class="stack" style="margin-top:12px"><b>${label}</b>
-    <div class="row" style="flex-wrap:nowrap"><input readonly value="${esc(url)}" onclick="this.select()"><button data-a="copy" data-url="${esc(url)}">Copy</button></div>
+    <div class="row" style="flex-wrap:nowrap"><input readonly value="${esc(url)}"><button data-a="copy" data-url="${esc(url)}">Copy</button></div>
     <div class="row"><a class="btnlink" target="_blank" rel="noopener" href="https://calendar.google.com/calendar/r?cid=${enc(url.replace(/^https:/, "webcal:"))}">Add to Google Calendar</a>
       <a class="btnlink" target="_blank" rel="noopener" href="https://outlook.live.com/calendar/0/addfromweb?url=${enc(url)}&name=${enc(key)}">Add to Outlook</a>
       <a class="btnlink" href="${esc(url.replace(/^https:/, "webcal:"))}">Apple / other</a></div></div>`;
@@ -266,7 +278,7 @@ function openSync() {
 }
 function openMenu() {
   const d = showModal(`<div class="row spread"><h2>More</h2><button class="ghost sm" data-a="close">✕</button></div>
-    <div class="stack" style="margin-top:10px"><button data-a="sync">📅 Sync with Google / Outlook / Apple calendar</button><button data-a="export">💾 Export everything (backup)</button>
+    <div class="stack" style="margin-top:10px"><button data-a="nav" data-v="polls">📊 Polls</button><button data-a="nav" data-v="wishes">💡 Feedback &amp; wish list</button><button data-a="sync">📅 Sync with Google / Outlook / Apple calendar</button><button data-a="export">💾 Export everything (backup)</button>
     <button data-a="switch">👤 Switch person</button><button data-a="signout">Sign out</button></div>`);
   d.dataset.kind = "menu";
 }
@@ -293,17 +305,162 @@ function downloadIcs(o) {
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([txt], { type: "text/calendar" })); a.download = e.title.replace(/[^\w]+/g, "-").slice(0, 40) + ".ics"; document.body.appendChild(a); a.click(); a.remove();
 }
 
+
+/* ---------------- chore cover ---------------- */
+function needsCoverHtml() {
+  const from = startOfDay(new Date()), to = endOfDay(addDays(from, 30));
+  const open = occsAll(from, to).filter((o) => o.e.category === "chore" && coverOf(o) && coverOf(o).status === "open");
+  if (!open.length) return "";
+  const day = (o) => o.start.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  const row = (o) => { const c = coverOf(o), mine = c.requested_by === S.me;
+    return `<div class="item sm"><div class="bar" style="background:${catOf("chore").color}"></div><div class="t" data-a="open" data-id="${o.e.id}" data-k="${o.key}" data-n="${o.k}"><b>${esc(o.e.title)}</b> · ${day(o)}
+      <div class="muted">${mine ? "You asked for cover" : esc(mname(c.requested_by)) + " can't do this one"}${c.note ? ": " + esc(c.note) : ""}</div></div>
+      ${mine ? `<button class="sm" data-a="covercancel" data-id="${o.e.id}" data-k="${o.key}">Cancel</button>` : `<button class="sm primary" data-a="covertake" data-id="${o.e.id}" data-k="${o.key}">I'll cover</button>`}</div>`; };
+  const others = open.filter((o) => coverOf(o).requested_by !== S.me), mine = open.filter((o) => coverOf(o).requested_by === S.me);
+  return `<div class="card attn" style="margin-bottom:10px"><h3>${others.length ? `${others.length} ${others.length === 1 ? "shift needs" : "shifts need"} cover` : "Your cover requests"}</h3>${others.map(row).join("")}${mine.map(row).join("")}</div>`;
+}
+
+/* ---------------- groceries ---------------- */
+const AISLES = [["Produce", /apple|banana|lettuce|spinach|tomato|onion|potato|carrot|pepper|cucumber|avocado|lemon|lime|berr|grape|fruit|veg|garlic|broccoli|celery|mushroom|salad|herb|cilantro|orange|peach|melon|corn|zucchini|kale|pear|mango/],
+  ["Dairy & eggs", /milk|cheese|butter|yogurt|cream|egg|creamer/], ["Meat & fish", /chicken|beef|pork|steak|bacon|sausage|turkey|ham\b|fish|salmon|shrimp|tuna|meat|burger/],
+  ["Bakery", /bread|bagel|roll|bun|tortilla|muffin|cake|donut|pastry/], ["Frozen", /frozen|pizza|fries|waffle/], ["Drinks", /water|soda|juice|coffee|tea\b|beer|wine|seltzer|gatorade|lemonade/],
+  ["Pantry", /rice|pasta|cereal|flour|sugar|oil|sauce|soup|bean|chip|snack|cracker|jelly|honey|spice|salt|oat|granola|cookie|nut|candy|mayo|ketchup|mustard/],
+  ["Household", /paper|towel|tissue|soap|detergent|shampoo|toothpaste|trash|bag|foil|wrap|sponge|cleaner|battery|bulb|diaper|wipes/]];
+function aisleOf(text) {
+  const t = text.toLowerCase();
+  if (/peanut butter|almond butter/.test(t)) return "Pantry";
+  if (/ice cream/.test(t)) return "Frozen";
+  for (const [name, re] of AISLES) if (re.test(t)) return name;
+  return "Other";
+}
+const norm = (t) => t.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim().replace(/s$/, "");
+const openItem = (list, text) => data.items.find((i) => i.list_name === list && !i.archived && !i.done && norm(i.text) === norm(text));
+
+function groceryBody() {
+  const items = data.items.filter((i) => i.list_name === "Groceries" && !i.archived);
+  const open = items.filter((i) => !i.done), done = items.filter((i) => i.done);
+  const mineN = open.filter((i) => i.added_by === S.me).length;
+  const counts = new Map();
+  for (const i of data.items.filter((x) => x.list_name === "Groceries" && (x.archived || x.done))) { const k = norm(i.text); const c = counts.get(k) || { text: i.text, n: 0 }; c.n++; c.text = i.text; counts.set(k, c); }
+  const often = [...counts.entries()].filter(([k]) => !openItem("Groceries", k)).sort((a, b) => b[1].n - a[1].n).slice(0, 8).map(([, v]) => v);
+  const groups = new Map(); for (const i of open) { const a = aisleOf(i.text); (groups.get(a) || groups.set(a, []).get(a)).push(i); }
+  const order = [...AISLES.map((a) => a[0]), "Other"].filter((a) => groups.has(a));
+  const row = (i) => `<div class="item li ${i.done ? "dn" : ""}"><button class="sm ck" data-a="itemdone" data-id="${i.id}" aria-label="${i.done ? "Put back" : "Got it"}">${i.done ? "✓" : ""}</button>
+    <div class="t"><b>${esc(i.text)}</b>${i.note ? ` <span class="pill">${esc(i.note)}</span>` : ""}<div class="muted">${i.done ? "got by " + esc(mname(i.done_by || i.added_by)) + " · " : ""}requested by ${esc(mname(i.added_by))}</div></div><button class="ghost sm" data-a="itemdel" data-id="${i.id}" aria-label="Remove">✕</button></div>`;
+  return `<div class="card"><div class="muted" style="margin-bottom:8px">${open.length ? `${open.length} to get · ${mineN} requested by you` : "Nothing requested right now."}</div>
+    <form id="itemForm" class="row" style="flex-wrap:nowrap"><input id="itemIn" maxlength="200" placeholder="Request an item (e.g. oat milk)" autocomplete="off" required><input id="noteIn" maxlength="60" placeholder="Qty / note" style="max-width:34%" autocomplete="off"><button class="primary" type="submit">Request</button></form>
+    ${often.length ? `<div class="muted" style="margin-top:10px">Often requested</div><div class="chips" style="margin-top:4px">${often.map((o) => `<span class="chip" data-a="readd" data-text="${esc(o.text)}">+ ${esc(o.text)}</span>`).join("")}</div>` : ""}</div>
+    ${order.map((a) => `<div class="card" style="margin-top:10px"><h3>${a}</h3>${groups.get(a).map(row).join("")}</div>`).join("")}
+    <form id="newListForm" class="row" style="margin-top:12px;flex-wrap:nowrap"><input id="newListIn" maxlength="40" placeholder="New list (e.g. Costco, Trip to Maine)" autocomplete="off"><button type="submit">Create</button></form>
+    ${done.length ? `<div class="card" style="margin-top:10px"><div class="row spread"><h3>In the cart</h3><button class="sm" data-a="clearlist">Clear ${done.length} bought</button></div>${done.map(row).join("")}</div>` : ""}`;
+}
+
+/* ---------------- feedback & wish list ---------------- */
+const TICKET_STATUS = { new: "New", planned: "Planned", in_progress: "In progress", done: "Done", declined: "Not planned" };
+function wishesView() {
+  const isAdmin = ADMIN_IDS.includes(S.me);
+  const votes = (t) => data.ticketVotes.filter((v) => v.ticket_id === t.id);
+  const rank = { new: 0, planned: 0, in_progress: 0, done: 1, declined: 1 };
+  const list = [...data.tickets].sort((a, b) => rank[a.status] - rank[b.status] || votes(b).length - votes(a).length || new Date(b.created_at) - new Date(a.created_at));
+  return `<div class="card"><h3>Tell us what's broken or what you wish it did</h3>
+    <div class="chips" style="margin:8px 0"><span class="chip ${S.wishKind === "wish" ? "on" : ""}" data-a="wishkind" data-v="wish">💡 I wish it could…</span><span class="chip ${S.wishKind === "bug" ? "on" : ""}" data-a="wishkind" data-v="bug">🐞 Something's broken</span></div>
+    <form id="wishForm" class="stack"><input id="wt" maxlength="120" required placeholder="${S.wishKind === "bug" ? "What went wrong? (short)" : "What should it do? (short)"}">
+    <textarea id="wd" rows="3" maxlength="1000" placeholder="${S.wishKind === "bug" ? "What did you tap, what did you expect, what happened?" : "Any details that would help (optional)"}"></textarea>
+    <button class="primary" type="submit">Send</button><div class="muted">We attach your screen size and browser to help fix bugs. Nothing else.</div></form></div>
+    ${list.map((t) => { const vs = votes(t), mine = vs.some((v) => v.member_id === S.me), canDel = isAdmin || t.created_by === S.me;
+      return `<div class="card ${t.status === "done" || t.status === "declined" ? "past" : ""}" style="margin-top:10px"><div class="row spread" style="align-items:flex-start;flex-wrap:nowrap"><div><b>${t.kind === "bug" ? "🐞" : "💡"} ${esc(t.title)}</b>
+        ${t.details ? `<div style="margin:4px 0">${esc(t.details).replace(/\n/g, "<br>")}</div>` : ""}<div class="muted">${esc(mname(t.created_by))} · ${new Date(t.created_at).toLocaleDateString([], { month: "short", day: "numeric" })} · <span class="pill ${t.status === "done" ? "going" : t.status === "declined" ? "no" : "maybe"}">${TICKET_STATUS[t.status]}</span></div></div>
+        <button class="sm ${mine ? "primary" : ""}" data-a="ticketvote" data-id="${t.id}">+1 · ${vs.length}</button></div>
+        ${isAdmin || canDel ? `<div class="row" style="margin-top:8px">${isAdmin ? `<select data-a-change="ticketstatus" data-id="${t.id}" style="width:auto">${Object.entries(TICKET_STATUS).map(([k, v]) => `<option value="${k}" ${t.status === k ? "selected" : ""}>${v}</option>`).join("")}</select>` : ""}${canDel ? `<button class="sm" data-a="ticketdel" data-id="${t.id}">Delete</button>` : ""}</div>` : ""}</div>`; }).join("") || `<p class="muted" style="margin-top:10px">Nothing yet. Be the first!</p>`}`;
+}
+
+
+/* ---------------- assigned tasks ---------------- */
+const PRIO = { high: { label: "High", rank: 0, cls: "no" }, medium: { label: "Medium", rank: 1, cls: "maybe" }, low: { label: "Low", rank: 2, cls: "" } };
+const todayKey = () => dayKey(new Date());
+const asgOf = (t) => data.taskAssignees.filter((a) => a.task_id === t.id);
+const effDue = (t, a) => (a && a.due_override) || t.due_date || "";
+function dueText(due, done) {
+  if (!due) return "No deadline";
+  const d = parseKey(due), diff = Math.round((d - startOfDay(new Date())) / 864e5), nice = d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  if (done) return `Was due ${nice}`;
+  return diff < 0 ? `Overdue ${-diff}d (${nice})` : diff === 0 ? "Due today" : diff === 1 ? "Due tomorrow" : `Due ${nice}`;
+}
+const isOverdue = (due, done) => !done && due && due < todayKey();
+function taskSort(a, b, who) {
+  const aa = who ? asgOf(a).find((x) => x.member_id === who) : null, bb = who ? asgOf(b).find((x) => x.member_id === who) : null;
+  return PRIO[a.priority].rank - PRIO[b.priority].rank || (effDue(a, aa) || "9999").localeCompare(effDue(b, bb) || "9999") || new Date(b.created_at) - new Date(a.created_at);
+}
+const taskOpen = (t) => asgOf(t).some((a) => a.status !== "done");
+
+function homeTasksHtml() {
+  const mine = data.tasks.filter((t) => asgOf(t).some((a) => a.member_id === S.me && a.status !== "done")).sort((a, b) => taskSort(a, b, S.me));
+  const unseen = mine.filter((t) => asgOf(t).find((a) => a.member_id === S.me).status === "assigned").length;
+  const decide = data.taskAssignees.filter((a) => a.ext_status === "pending" && (data.tasks.find((t) => t.id === a.task_id) || {}).assigned_by === S.me && a.member_id !== S.me);
+  if (!mine.length && !decide.length) return "";
+  const row = (t) => { const a = asgOf(t).find((x) => x.member_id === S.me), due = effDue(t, a);
+    return `<div class="item sm" data-a="nav" data-v="tasks"><div class="bar" style="background:var(--${PRIO[t.priority].cls || "line"})"></div><div class="t"><b>${a.status === "assigned" ? "🆕 " : ""}${esc(t.title)}</b><div class="muted"><span class="${isOverdue(due, false) ? "overdue" : ""}">${dueText(due, false)}</span> · ${PRIO[t.priority].label} · from ${esc(mname(t.assigned_by))}</div></div></div>`; };
+  return `<div class="card ${unseen || decide.length ? "attn" : ""}" style="margin-bottom:10px"><div class="row spread"><h3>Your tasks${unseen ? ` · ${unseen} new` : ""}</h3><button class="sm" data-a="nav" data-v="tasks">Open</button></div>
+    ${decide.length ? `<div class="muted" style="margin:4px 0">${decide.length} deadline ${decide.length === 1 ? "request needs" : "requests need"} your answer</div>` : ""}${mine.slice(0, 3).map(row).join("")}${mine.length > 3 ? `<div class="muted">+${mine.length - 3} more</div>` : ""}</div>`;
+}
+
+function tasksView() {
+  const tabs = [["mine", "To me"], ["assigned", "I assigned"], ["all", "Everyone"]];
+  let list = data.tasks.filter((t) => S.tasksTab === "mine" ? asgOf(t).some((a) => a.member_id === S.me) : S.tasksTab === "assigned" ? t.assigned_by === S.me : true);
+  const open = list.filter(taskOpen).sort((a, b) => taskSort(a, b, S.tasksTab === "mine" ? S.me : null)), done = list.filter((t) => !taskOpen(t)).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  return `<div class="row spread" style="margin-bottom:10px"><div class="row tabs">${tabs.map(([k, l]) => `<button data-a="taskstab" data-v="${k}" class="${S.tasksTab === k ? "on" : ""}">${l}</button>`).join("")}</div><button class="primary" data-a="tasknew">+ New task</button></div>
+    ${open.map(taskCard).join("") || `<div class="card"><p class="muted">${S.tasksTab === "mine" ? "Nothing assigned to you. 🎉" : "No open tasks here."}</p></div>`}
+    ${done.length ? `<h3 class="muted" style="margin:18px 0 0">Done</h3>${done.slice(0, 20).map(taskCard).join("")}` : ""}`;
+}
+
+function taskCard(t) {
+  const asg = asgOf(t), byMe = t.assigned_by === S.me, allDone = asg.length && asg.every((a) => a.status === "done");
+  const rows = asg.map((a) => { const due = effDue(t, a), mine = a.member_id === S.me, m = member(a.member_id) || { color: "#999" };
+    const stat = a.status === "done" ? `<span class="pill going">done</span>` : a.status === "seen" ? `<span class="pill maybe">seen</span>` : `<span class="pill no">not seen yet</span>`;
+    let acts = "";
+    if (mine && a.status === "assigned") acts += `<button class="sm primary" data-a="taskseen" data-id="${t.id}" data-m="${a.member_id}">👀 I've seen this</button>`;
+    if ((mine || byMe) && a.status !== "done") acts += `<button class="sm" data-a="taskdone" data-id="${t.id}" data-m="${a.member_id}">✓ ${mine ? "Done" : "Mark done"}</button>`;
+    if ((mine || byMe) && a.status === "done") acts += `<button class="sm" data-a="taskreopen" data-id="${t.id}" data-m="${a.member_id}">Reopen</button>`;
+    let ext = "";
+    if (a.ext_status === "pending") ext = byMe && !mine
+      ? `<div class="cover warn">${esc(mname(a.member_id))} asks to move this to <b>${dueText(a.ext_date, true).replace("Was due ", "")}</b>${a.ext_note ? ` — “${esc(a.ext_note)}”` : ""}<div class="row" style="margin-top:6px"><button class="sm primary" data-a="extapprove" data-id="${t.id}" data-m="${a.member_id}">Approve</button><button class="sm" data-a="extdecline" data-id="${t.id}" data-m="${a.member_id}">Decline</button></div></div>`
+      : `<div class="muted">⏳ ${mine ? "Waiting for " + esc(mname(t.assigned_by)) + " to answer your request" : "Asked to move to " + dueText(a.ext_date, true).replace("Was due ", "")}</div>`;
+    else if (a.ext_status === "declined" && mine) ext = `<div class="muted">${esc(mname(t.assigned_by))} kept the original deadline.</div>`;
+    else if (a.ext_status === "approved" && a.due_override) ext = `<div class="muted">Deadline moved by ${esc(mname(t.assigned_by))}.</div>`;
+    const ask = mine && a.status !== "done" && a.ext_status !== "pending" ? `<details class="cover"><summary>Need more time?</summary><div class="stack" style="margin-top:8px"><input type="date" id="xd-${t.id}" min="${todayKey()}"><input id="xn-${t.id}" maxlength="200" placeholder="Why? (optional)"><button class="sm primary" data-a="extreq" data-id="${t.id}" data-m="${a.member_id}">Ask for new deadline</button></div></details>` : "";
+    return `<div class="arow"><div class="row"><span class="pdot" style="background:${m.color}"></span><b>${esc(mname(a.member_id))}${mine ? " (you)" : ""}</b>${stat}<span class="muted ${isOverdue(due, a.status === "done") ? "overdue" : ""}">${dueText(due, a.status === "done")}</span></div>
+      ${acts ? `<div class="row" style="margin-top:6px">${acts}</div>` : ""}${ext}${ask}</div>`; }).join("");
+  return `<div class="card task prio-${t.priority} ${allDone ? "past" : ""}" style="margin-top:10px"><div class="row spread" style="align-items:flex-start;flex-wrap:nowrap"><div><b>${esc(t.title)}</b>
+      <div class="muted">from ${esc(mname(t.assigned_by))} · ${PRIO[t.priority].label} priority${t.due_date ? " · " + dueText(t.due_date, allDone) : ""}</div></div><span class="pill ${PRIO[t.priority].cls}">${PRIO[t.priority].label}</span></div>
+    ${t.details ? `<p style="margin:6px 0">${esc(t.details).replace(/\n/g, "<br>")}</p>` : ""}${rows}
+    ${byMe ? `<div class="row" style="margin-top:10px;justify-content:flex-end"><button class="sm" data-a="taskedit" data-id="${t.id}">Edit</button><button class="sm" data-a="taskdel" data-id="${t.id}">Delete</button></div>` : ""}</div>`;
+}
+
+function openTaskForm(t) {
+  S.modal = { type: "task", t: t ? JSON.parse(JSON.stringify(t)) : { title: "", details: "", priority: "medium", due_date: "", assignees: [] }, isNew: !t };
+  const f = S.modal.t;
+  const d = showModal(`<form id="taskForm" class="stack"><div class="row spread"><h2>${t ? "Edit" : "New"} task</h2><button type="button" class="ghost sm" data-a="close">✕</button></div>
+    <div><label>What needs doing?</label><input id="tf_title" required maxlength="120" value="${esc(f.title)}" placeholder="e.g. Clean the catio"></div>
+    <div><label>Details (optional)</label><textarea id="tf_details" rows="3" maxlength="1000">${esc(f.details || "")}</textarea></div>
+    ${t ? "" : `<div><label>Assign to</label><div class="chips" id="tf_who">${data.members.map((m) => `<span class="chip" data-a="tfwho" data-id="${m.id}"><span class="dot" style="background:${m.color}"></span>${esc(m.name)}</span>`).join("")}</div></div>`}
+    <div><label>Priority</label><div class="chips" id="tf_prio">${["low", "medium", "high"].map((k) => `<span class="chip ${f.priority === k ? "on" : ""}" data-a="tfprio" data-id="${k}">${PRIO[k].label}</span>`).join("")}</div></div>
+    <div><label>Deadline (optional)</label><input type="date" id="tf_due" value="${esc(f.due_date || "")}"></div>
+    <div class="err" id="tf_err"></div><div class="row" style="justify-content:flex-end"><button type="button" data-a="close">Cancel</button><button class="primary" type="submit">${t ? "Save" : "Assign"}</button></div></form>`);
+  d.dataset.kind = "taskform";
+}
+
 /* ---------------- RSVP / chore helpers ---------------- */
 const rsvpsFor = (o) => data.rsvps.filter((r) => r.event_id === o.e.id && r.on_date === o.key);
 const doneFor = (o) => data.done.find((d) => d.event_id === o.e.id && d.on_date === o.key);
 const invited = (e) => (e.member_ids && e.member_ids.length ? e.member_ids : data.members.map((m) => m.id));
 
 /* ---------------- modals ---------------- */
-function closeModal() { const d = document.querySelector("dialog[open]"); if (d) d.close(); S.modal = null; document.querySelectorAll("dialog").forEach((x) => x.remove()); }
+function closeModal() { const d = document.querySelector("dialog[open]"); S.dlg = null; if (d) d.close(); S.modal = null; document.querySelectorAll("dialog").forEach((x) => x.remove()); }
 function showModal(html) {
   document.querySelectorAll("dialog").forEach((x) => x.remove());
-  const d = document.createElement("dialog"); d.innerHTML = html; document.body.appendChild(d);
-  d.addEventListener("close", () => { d.remove(); S.modal = null; });
+  const d = document.createElement("dialog"); d.innerHTML = html; document.body.appendChild(d); S.dlg = d;
+  // Only forget the modal state if THIS dialog is still the current one (an old dialog's late 'close' event must not wipe a newer form).
+  d.addEventListener("close", () => { d.remove(); if (S.dlg === d) { S.modal = null; S.dlg = null; } });
   d.addEventListener("click", (e) => { if (e.target === d) d.close(); });
   d.showModal(); return d;
 }
@@ -311,6 +468,16 @@ function showModal(html) {
 function openDetail(id, key, k) {
   const e = data.events.find((x) => x.id === id); if (!e) return;
   S.modal = { type: "detail", id, key, k: Number(k) }; drawDetail();
+}
+function coverBlock(o) {
+  const cv = coverOf(o), base = baseWho(o), nm = (id) => esc(mname(id));
+  const future = o.end >= new Date(Date.now() - 864e5);
+  if (cv && cv.status === "open") return `<div class="cover warn">⚠ <b>${nm(cv.requested_by)}</b> can't do this one${cv.note ? ": " + esc(cv.note) : ""}.
+    <div class="row" style="margin-top:6px">${cv.requested_by === S.me ? `<button class="sm" data-a="covercancel">Cancel request</button>` : `<button class="sm primary" data-a="covertake">I'll cover it</button>`}</div></div>`;
+  if (cv) return `<div class="cover ok">✅ <b>${nm(cv.covered_by)}</b> is covering for ${nm(cv.requested_by)}.
+    <div class="row" style="margin-top:6px">${cv.covered_by === S.me ? `<button class="sm" data-a="coverrelease">I can't after all</button>` : ""}${cv.requested_by === S.me ? `<button class="sm" data-a="covercancel">Take it back</button>` : ""}</div></div>`;
+  if (future && base.includes(S.me)) return `<details class="cover"><summary>Can't make it? Ask for cover</summary><div class="row" style="margin-top:8px;flex-wrap:nowrap"><input id="coverNote" maxlength="100" placeholder="Optional note (e.g. out of town)"><button class="sm primary" data-a="coverreq">Ask</button></div></details>`;
+  return "";
 }
 function drawDetail() {
   const m = S.modal; if (!m || m.type !== "detail") return;
@@ -326,6 +493,7 @@ function drawDetail() {
     <div class="muted">${esc(whenText(o))}${e.place ? " · " + esc(e.place) : ""}${e.recurrence !== "none" ? " · repeats " + e.recurrence : ""}</div>
     <div class="muted">${who.length ? "For " + who.map((x) => esc(mname(x))).join(", ") + " · " : "Whole family · "}added by ${esc(mname(e.added_by))}</div>
     ${e.notes ? `<p>${esc(e.notes).replace(/\n/g, "<br>")}</p>` : ""}
+    ${e.category === "chore" ? coverBlock(o) : ""}
     ${e.category === "chore" ? `<div class="row" style="margin:10px 0"><b>${who.length ? esc(mname(who[0])) + "'s turn" : "Chore"}</b>
        <button class="sm ${done ? "" : "primary"}" data-a="done">${done ? `✓ Done by ${esc(mname(done.member_id))} (undo)` : "Mark done"}</button></div>` : ""}
     ${e.rsvp_enabled ? `<div style="margin:12px 0"><div class="muted">Are you going?</div><div class="row">
@@ -378,8 +546,36 @@ document.addEventListener("click", async (ev) => {
   if (el.tagName === "A") ev.preventDefault();
   switch (a) {
     case "view": S.view = el.dataset.v; render(); break;
+    case "nav": closeModal(); S.view = el.dataset.v; window.scrollTo(0, 0); render(); break;
+    case "calmode": S.cal = el.dataset.v; render(); break;
+    case "taskstab": S.tasksTab = el.dataset.v; render(); break;
+    case "tasknew": openTaskForm(null); break;
+    case "taskedit": openTaskForm(data.tasks.find((x) => x.id === el.dataset.id)); break;
+    case "taskdel": if (confirm("Delete this task for everyone?")) guarded(async () => { await api.deleteTask(el.dataset.id); await refresh(); toast("Task deleted"); }); break;
+    case "tfwho": { const f = S.modal.t, id = el.dataset.id; f.assignees = f.assignees.includes(id) ? f.assignees.filter((x) => x !== id) : [...f.assignees, id]; el.classList.toggle("on"); break; }
+    case "tfprio": S.modal.t.priority = el.dataset.id; document.querySelectorAll("#tf_prio .chip").forEach((c) => c.classList.toggle("on", c.dataset.id === el.dataset.id)); break;
+    case "taskseen": case "taskdone": case "taskreopen": { const st = a === "taskseen" ? "seen" : a === "taskdone" ? "done" : "seen";
+      guarded(async () => { await api.setTaskStatus(el.dataset.id, el.dataset.m, st); await refresh(); toast(a === "taskseen" ? "Got it. They'll see you've seen it." : a === "taskdone" ? "Marked done. Nice!" : "Reopened"); }); break; }
+    case "extreq": { const id = el.dataset.id, m = el.dataset.m, date = (document.getElementById("xd-" + id) || {}).value, note = ((document.getElementById("xn-" + id) || {}).value || "").trim(); const t = data.tasks.find((x) => x.id === id);
+      if (!date) { toast("Pick the new deadline first"); break; }
+      guarded(async () => { await api.requestExtension(id, m, date, note); if (t.assigned_by === m) await api.decideExtension(id, m, true, date); await refresh(); toast(t.assigned_by === m ? "Deadline moved" : "Request sent to " + mname(t.assigned_by)); }); break; }
+    case "extapprove": case "extdecline": { const a2 = data.taskAssignees.find((x) => x.task_id === el.dataset.id && x.member_id === el.dataset.m);
+      guarded(async () => { await api.decideExtension(a2.task_id, a2.member_id, a === "extapprove", a2.ext_date); await refresh(); toast(a === "extapprove" ? "Deadline moved" : "Kept the original deadline"); }); break; }
+    case "covertake": case "covercancel": case "coverrelease": case "coverreq": {
+      const id = el.dataset.id || (S.modal && S.modal.id), key = el.dataset.k || (S.modal && S.modal.key); if (!id || !key) break;
+      guarded(async () => {
+        if (a === "covertake") await api.takeCover(id, key, S.me);
+        else if (a === "covercancel") await api.cancelCover(id, key);
+        else if (a === "coverrelease") await api.releaseCover(id, key);
+        else await api.requestCover(id, key, S.me, (document.getElementById("coverNote") || {}).value ? document.getElementById("coverNote").value.trim() : "");
+        await refresh(); toast(a === "covertake" ? "You're covering it. Thank you!" : a === "coverreq" ? "Cover requested. The family can see it on Home." : a === "coverrelease" ? "Released. It's open again." : "Done");
+      }); break; }
+    case "readd": { const t = el.dataset.text; const d = openItem("Groceries", t); if (d) { toast(`${t} is already requested by ${mname(d.added_by)}`); break; } guarded(async () => { await api.addItem("Groceries", t, S.me, ""); await refresh(); }); break; }
+    case "wishkind": S.wishKind = el.dataset.v; render(); break;
+    case "ticketvote": { const on = !data.ticketVotes.some((v) => v.ticket_id === el.dataset.id && v.member_id === S.me); guarded(async () => { await api.ticketVote(el.dataset.id, S.me, on); await refresh(); }); break; }
+    case "ticketdel": if (confirm("Delete this?")) guarded(async () => { await api.deleteTicket(el.dataset.id); await refresh(); }); break;
     case "prev": case "next": { const dir = a === "prev" ? -1 : 1;
-      if (S.view === "week") { S.sel = addDays(S.sel, 7 * dir); S.cursor = S.sel; }
+      if (S.cal === "week") { S.sel = addDays(S.sel, 7 * dir); S.cursor = S.sel; }
       else { S.cursor = new Date(S.cursor.getFullYear(), S.cursor.getMonth() + dir, 1); S.sel = S.cursor; }
       render(); break; }
     case "today": S.cursor = startOfDay(new Date()); S.sel = startOfDay(new Date()); render(); break;
@@ -422,7 +618,10 @@ document.addEventListener("click", async (ev) => {
   }
 });
 
+document.addEventListener("focusin", (ev) => { if (ev.target.matches && ev.target.matches("input[readonly]")) ev.target.select(); });
 document.addEventListener("change", (ev) => {
+  const sel = ev.target.closest && ev.target.closest("[data-a-change=ticketstatus]");
+  if (sel) { guarded(async () => { await api.setTicketStatus(sel.dataset.id, sel.value); await refresh(); toast("Status updated"); }); return; }
   if (ev.target.id === "f_cat") {
     const c = catOf(ev.target.value), f = S.modal.e; f.category = ev.target.value;
     f.member_ids = ["work", "school", "away", "appointment"].includes(f.category) ? [S.me] : [];
@@ -436,7 +635,20 @@ document.addEventListener("change", (ev) => {
 
 document.addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  if (ev.target.id === "itemForm") { const inp = document.getElementById("itemIn"), t = inp.value.trim(); if (!t) return; inp.value = ""; guarded(async () => { await api.addItem(S.list, t, S.me); await refresh(); }); return; }
+  if (ev.target.id === "itemForm") {
+    const inp = document.getElementById("itemIn"), noteEl = document.getElementById("noteIn"), t = inp.value.trim(), note = noteEl ? noteEl.value.trim() : ""; if (!t) return;
+    const d = openItem(S.list, t); if (d) { inp.value = ""; if (noteEl) noteEl.value = ""; toast(`${d.text} is already on the list (requested by ${mname(d.added_by)})`); return; }
+    inp.value = ""; if (noteEl) noteEl.value = ""; guarded(async () => { await api.addItem(S.list, t, S.me, note); await refresh(); }); return; }
+  if (ev.target.id === "taskForm") {
+    const f = S.modal.t, title = document.getElementById("tf_title").value.trim(), details = document.getElementById("tf_details").value.trim(), due = document.getElementById("tf_due").value || null, err = document.getElementById("tf_err");
+    if (!title) return; if (S.modal.isNew && !f.assignees.length) { err.textContent = "Pick at least one person."; return; }
+    guarded(async () => { if (S.modal.isNew) await api.createTask({ title, details: details || null, assigned_by: S.me, priority: f.priority, due_date: due }, f.assignees);
+      else await api.updateTask(f.id, { title, details: details || null, priority: f.priority, due_date: due });
+      closeModal(); await refresh(); toast(S.modal === null ? "Saved" : "Saved"); }); return; }
+  if (ev.target.id === "wishForm") {
+    const title = document.getElementById("wt").value.trim(), details = document.getElementById("wd").value.trim(); if (!title) return;
+    const context = `${S.view} · ${innerWidth}x${innerHeight} · ${navigator.userAgent}`.slice(0, 290);
+    guarded(async () => { await api.addTicket({ kind: S.wishKind, title, details: details || null, context, created_by: S.me }); await refresh(); toast("Thanks! It's on the list."); }); return; }
   if (ev.target.id === "newListForm") { const n = document.getElementById("newListIn").value.trim(); if (!n) return; S.list = n; document.getElementById("newListIn").value = ""; render(); document.getElementById("itemIn")?.focus(); return; }
   if (ev.target.id === "pollForm") {
     const q = document.getElementById("pq").value.trim(), opts = document.getElementById("po").value.split("\n").map((x) => x.trim()).filter(Boolean).slice(0, 10);
