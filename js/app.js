@@ -149,7 +149,7 @@ function weekView() {
     <h2>${start.toLocaleDateString([], { month: "short", day: "numeric" })} – ${addDays(start, 6).toLocaleDateString([], { month: "short", day: "numeric" })}</h2></div><div class="weekgrid">${cols}</div>`;
 }
 
-function agendaView() { return homeTasksHtml() + needsCoverHtml() + needsReplyHtml() + glanceHtml() + agendaBody(); }
+function agendaView() { return homeTasksHtml() + homeGroceryHtml() + needsCoverHtml() + needsReplyHtml() + glanceHtml() + agendaBody(); }
 function agendaBody() {
   const from = startOfDay(new Date()), to = endOfDay(addDays(from, 90));
   const occs = occsInRange(from, to);
@@ -339,20 +339,47 @@ const openItem = (list, text) => data.items.find((i) => i.list_name === list && 
 function groceryBody() {
   const items = data.items.filter((i) => i.list_name === "Groceries" && !i.archived);
   const open = items.filter((i) => !i.done), done = items.filter((i) => i.done);
-  const mineN = open.filter((i) => i.added_by === S.me).length;
+  const mineAsg = open.filter((i) => i.assigned_to === S.me), pool = open.filter((i) => !i.assigned_to), others = open.filter((i) => i.assigned_to && i.assigned_to !== S.me);
   const counts = new Map();
   for (const i of data.items.filter((x) => x.list_name === "Groceries" && (x.archived || x.done))) { const k = norm(i.text); const c = counts.get(k) || { text: i.text, n: 0 }; c.n++; c.text = i.text; counts.set(k, c); }
   const often = [...counts.entries()].filter(([k]) => !openItem("Groceries", k)).sort((a, b) => b[1].n - a[1].n).slice(0, 8).map(([, v]) => v);
-  const groups = new Map(); for (const i of open) { const a = aisleOf(i.text); (groups.get(a) || groups.set(a, []).get(a)).push(i); }
+  const byDue = (a, b) => (a.needed_by || "9999").localeCompare(b.needed_by || "9999") || new Date(a.created_at) - new Date(b.created_at);
+  const dueTag = (i) => i.needed_by ? ` <span class="pill ${isOverdue(i.needed_by, i.done) ? "no" : ""}">${i.done ? "" : isOverdue(i.needed_by, false) ? "Overdue · " : "Need by "}${parseKey(i.needed_by).toLocaleDateString([], { month: "short", day: "numeric" })}</span>` : "";
+  const who = (i) => i.done ? `got by ${esc(mname(i.done_by || i.added_by))} · ` : i.assigned_to ? `${i.assigned_to === S.me ? "yours" : esc(mname(i.assigned_to))}${i.assigned_by && i.assigned_by !== i.assigned_to ? ` (assigned by ${esc(mname(i.assigned_by))})` : " (volunteered)"} · ` : "";
+  const row = (i, mode) => `<div class="item li ${i.done ? "dn" : ""}"><button class="sm ck" data-a="itemdone" data-id="${i.id}" aria-label="${i.done ? "Put back" : "Got it"}">${i.done ? "✓" : ""}</button>
+    <div class="t"><b>${esc(i.text)}</b>${i.note ? ` <span class="pill">${esc(i.note)}</span>` : ""}${dueTag(i)}<div class="muted">${who(i)}requested by ${esc(mname(i.added_by))}</div>
+      ${i.done ? "" : `<div class="row" style="margin-top:4px">${mode === "pool" ? `<button class="sm" data-a="grab" data-id="${i.id}">🙋 I'll get it</button>` : ""}${mode === "other" ? `<button class="sm" data-a="grab" data-id="${i.id}">Take over</button>` : ""}${i.assigned_to && (i.assigned_to === S.me || i.assigned_by === S.me) ? `<button class="sm" data-a="passback" data-id="${i.id}">Pass back</button>` : ""}<button class="sm" data-a="gassign" data-id="${i.id}">Assign / date</button></div>`}</div>
+    <button class="ghost sm" data-a="itemdel" data-id="${i.id}" aria-label="Remove">✕</button></div>`;
+  const groups = new Map(); for (const i of pool) { const a = aisleOf(i.text); (groups.get(a) || groups.set(a, []).get(a)).push(i); }
   const order = [...AISLES.map((a) => a[0]), "Other"].filter((a) => groups.has(a));
-  const row = (i) => `<div class="item li ${i.done ? "dn" : ""}"><button class="sm ck" data-a="itemdone" data-id="${i.id}" aria-label="${i.done ? "Put back" : "Got it"}">${i.done ? "✓" : ""}</button>
-    <div class="t"><b>${esc(i.text)}</b>${i.note ? ` <span class="pill">${esc(i.note)}</span>` : ""}<div class="muted">${i.done ? "got by " + esc(mname(i.done_by || i.added_by)) + " · " : ""}requested by ${esc(mname(i.added_by))}</div></div><button class="ghost sm" data-a="itemdel" data-id="${i.id}" aria-label="Remove">✕</button></div>`;
-  return `<div class="card"><div class="muted" style="margin-bottom:8px">${open.length ? `${open.length} to get · ${mineN} requested by you` : "Nothing requested right now."}</div>
-    <form id="itemForm" class="row" style="flex-wrap:nowrap"><input id="itemIn" maxlength="200" placeholder="Request an item (e.g. oat milk)" autocomplete="off" required><input id="noteIn" maxlength="60" placeholder="Qty / note" style="max-width:34%" autocomplete="off"><button class="primary" type="submit">Request</button></form>
+  return `<div class="card"><div class="muted" style="margin-bottom:8px">${open.length ? `${open.length} to get · ${pool.length} need a volunteer · ${mineAsg.length} yours` : "Nothing requested right now."}</div>
+    <form id="itemForm" class="stack"><div class="row" style="flex-wrap:nowrap"><input id="itemIn" maxlength="200" placeholder="Request an item (e.g. cottage cheese)" autocomplete="off" required><input id="noteIn" maxlength="60" placeholder="Qty / note" style="max-width:34%" autocomplete="off"></div>
+      <div class="row" style="flex-wrap:nowrap"><select id="asgIn" aria-label="Who should get it"><option value="">Anyone can grab it</option>${data.members.map((m) => `<option value="${m.id}">Assign to ${esc(m.name)}</option>`).join("")}</select><input type="date" id="needIn" min="${todayKey()}" aria-label="Needed by (optional)" title="Needed by (optional)"></div>
+      <button class="primary" type="submit">Request</button></form>
     ${often.length ? `<div class="muted" style="margin-top:10px">Often requested</div><div class="chips" style="margin-top:4px">${often.map((o) => `<span class="chip" data-a="readd" data-text="${esc(o.text)}">+ ${esc(o.text)}</span>`).join("")}</div>` : ""}</div>
-    ${order.map((a) => `<div class="card" style="margin-top:10px"><h3>${a}</h3>${groups.get(a).map(row).join("")}</div>`).join("")}
+    ${mineAsg.length ? `<div class="card attn" style="margin-top:10px"><h3>For you (${mineAsg.length})</h3>${mineAsg.sort(byDue).map((i) => row(i, "mine")).join("")}</div>` : ""}
+    ${pool.length ? `<div class="card" style="margin-top:10px"><h3>Anyone can grab (${pool.length})</h3><div class="muted">Nobody's assigned yet. Tap “I'll get it” if you're heading out.</div></div>${order.map((a) => `<div class="card" style="margin-top:10px"><h3>${a}</h3>${groups.get(a).sort(byDue).map((i) => row(i, "pool")).join("")}</div>`).join("")}` : ""}
+    ${others.length ? `<div class="card" style="margin-top:10px"><h3>Assigned to others (${others.length})</h3>${others.sort(byDue).map((i) => row(i, "other")).join("")}</div>` : ""}
     <form id="newListForm" class="row" style="margin-top:12px;flex-wrap:nowrap"><input id="newListIn" maxlength="40" placeholder="New list (e.g. Costco, Trip to Maine)" autocomplete="off"><button type="submit">Create</button></form>
-    ${done.length ? `<div class="card" style="margin-top:10px"><div class="row spread"><h3>In the cart</h3><button class="sm" data-a="clearlist">Clear ${done.length} bought</button></div>${done.map(row).join("")}</div>` : ""}`;
+    ${done.length ? `<div class="card" style="margin-top:10px"><div class="row spread"><h3>In the cart</h3><button class="sm" data-a="clearlist">Clear ${done.length} bought</button></div>${done.map((i) => row(i, "done")).join("")}</div>` : ""}`;
+}
+function openGroceryAssign(id) {
+  const i = data.items.find((x) => x.id === id); if (!i) return;
+  S.modal = { type: "gassign", id };
+  const d = showModal(`<form id="gassignForm" class="stack"><div class="row spread"><h2>${esc(i.text)}</h2><button type="button" class="ghost sm" data-a="close">✕</button></div>
+    <div><label>Who should get it?</label><select id="ga_who"><option value="">Anyone can grab it</option>${data.members.map((m) => `<option value="${m.id}" ${i.assigned_to === m.id ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</select></div>
+    <div><label>Needed by (optional)</label><input type="date" id="ga_due" value="${esc(i.needed_by || "")}"></div>
+    <div class="row" style="justify-content:flex-end"><button type="button" data-a="close">Cancel</button><button class="primary" type="submit">Save</button></div></form>`);
+  d.dataset.kind = "gassign";
+}
+function homeGroceryHtml() {
+  const open = data.items.filter((i) => i.list_name === "Groceries" && !i.archived && !i.done); if (!open.length) return "";
+  const mine = open.filter((i) => i.assigned_to === S.me), pool = open.filter((i) => !i.assigned_to);
+  if (!mine.length && !pool.length) return "";
+  const od = mine.filter((i) => isOverdue(i.needed_by, false)).length;
+  return `<div class="card ${mine.length ? "attn" : ""}" style="margin-bottom:10px"><div class="row spread"><h3>🛒 Groceries</h3><button class="sm" data-a="nav" data-v="lists">Open</button></div>
+    ${mine.length ? `<div class="muted" style="margin:4px 0"><b>${mine.length}</b> for you${od ? ` · <span class="overdue">${od} overdue</span>` : ""}: ${mine.slice(0, 3).map((i) => esc(i.text) + (i.needed_by ? " (by " + parseKey(i.needed_by).toLocaleDateString([], { month: "short", day: "numeric" }) + ")" : "")).join(", ")}${mine.length > 3 ? "…" : ""}</div>` : ""}
+    ${pool.length ? `<div class="muted">${pool.length} ${pool.length === 1 ? "item needs" : "items need"} a volunteer: ${pool.slice(0, 4).map((i) => esc(i.text)).join(", ")}${pool.length > 4 ? "…" : ""}</div>` : ""}</div>`;
 }
 
 /* ---------------- feedback & wish list ---------------- */
@@ -570,6 +597,9 @@ document.addEventListener("click", async (ev) => {
         else await api.requestCover(id, key, S.me, (document.getElementById("coverNote") || {}).value ? document.getElementById("coverNote").value.trim() : "");
         await refresh(); toast(a === "covertake" ? "You're covering it. Thank you!" : a === "coverreq" ? "Cover requested. The family can see it on Home." : a === "coverrelease" ? "Released. It's open again." : "Done");
       }); break; }
+    case "grab": guarded(async () => { await api.updateItem(el.dataset.id, { assigned_to: S.me, assigned_by: S.me }); await refresh(); toast("You're getting it. Thanks!"); }); break;
+    case "passback": guarded(async () => { await api.updateItem(el.dataset.id, { assigned_to: null, assigned_by: null }); await refresh(); toast("Back in the pool for anyone to grab"); }); break;
+    case "gassign": openGroceryAssign(el.dataset.id); break;
     case "readd": { const t = el.dataset.text; const d = openItem("Groceries", t); if (d) { toast(`${t} is already requested by ${mname(d.added_by)}`); break; } guarded(async () => { await api.addItem("Groceries", t, S.me, ""); await refresh(); }); break; }
     case "wishkind": S.wishKind = el.dataset.v; render(); break;
     case "ticketvote": { const on = !data.ticketVotes.some((v) => v.ticket_id === el.dataset.id && v.member_id === S.me); guarded(async () => { await api.ticketVote(el.dataset.id, S.me, on); await refresh(); }); break; }
@@ -638,7 +668,12 @@ document.addEventListener("submit", async (ev) => {
   if (ev.target.id === "itemForm") {
     const inp = document.getElementById("itemIn"), noteEl = document.getElementById("noteIn"), t = inp.value.trim(), note = noteEl ? noteEl.value.trim() : ""; if (!t) return;
     const d = openItem(S.list, t); if (d) { inp.value = ""; if (noteEl) noteEl.value = ""; toast(`${d.text} is already on the list (requested by ${mname(d.added_by)})`); return; }
-    inp.value = ""; if (noteEl) noteEl.value = ""; guarded(async () => { await api.addItem(S.list, t, S.me, note); await refresh(); }); return; }
+    const asg = (document.getElementById("asgIn") || {}).value || "", need = (document.getElementById("needIn") || {}).value || "";
+    inp.value = ""; if (noteEl) noteEl.value = ""; const ae = document.getElementById("asgIn"), ne = document.getElementById("needIn"); if (ae) ae.value = ""; if (ne) ne.value = "";
+    guarded(async () => { await api.addItem(S.list, t, S.me, note, asg, need); await refresh(); toast(asg ? `Assigned to ${mname(asg)}` : "Requested. Anyone can grab it."); }); return; }
+  if (ev.target.id === "gassignForm") {
+    const who = document.getElementById("ga_who").value, due = document.getElementById("ga_due").value || null, id = S.modal.id;
+    guarded(async () => { await api.updateItem(id, { assigned_to: who || null, assigned_by: who ? S.me : null, needed_by: due }); closeModal(); await refresh(); toast("Updated"); }); return; }
   if (ev.target.id === "taskForm") {
     const f = S.modal.t, title = document.getElementById("tf_title").value.trim(), details = document.getElementById("tf_details").value.trim(), due = document.getElementById("tf_due").value || null, err = document.getElementById("tf_err");
     if (!title) return; if (S.modal.isNew && !f.assignees.length) { err.textContent = "Pick at least one person."; return; }

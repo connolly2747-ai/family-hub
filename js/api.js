@@ -58,7 +58,8 @@ async function supabaseBackend() {
       if (!member_id) must(await sb.from("chore_done").delete().match({ event_id, on_date }));
       else must(await sb.from("chore_done").upsert({ event_id, on_date, member_id }));
     },
-    async addItem(list_name, text, added_by, note) { must(await sb.from("list_items").insert({ list_name, text, added_by, note: note || null })); },
+    async addItem(list_name, text, added_by, note, assigned_to, needed_by) { must(await sb.from("list_items").insert({ list_name, text, added_by, note: note || null, assigned_to: assigned_to || null, assigned_by: assigned_to ? added_by : null, needed_by: needed_by || null })); },
+    async updateItem(id, fields) { must(await sb.from("list_items").update(fields).eq("id", id)); },
     async setItemDone(id, done, by) { must(await sb.from("list_items").update({ done, done_by: done ? by : null }).eq("id", id)); },
     async deleteItem(id) { must(await sb.from("list_items").delete().eq("id", id)); },
     async clearDone(list_name) { must(await sb.from("list_items").update({ archived: true }).match({ list_name, done: true, archived: false })); },
@@ -115,7 +116,8 @@ function demoBackend() {
     async addReply(event_id, member_id, body) { db.replies.push({ id: uuid(), event_id, member_id, body, created_at: new Date().toISOString() }); save(); },
     async deleteReply(id) { db.replies = db.replies.filter((r) => r.id !== id); save(); },
     async setDone(event_id, on_date, member_id) { db.done = db.done.filter((r) => !(r.event_id === event_id && r.on_date === on_date)); if (member_id) db.done.push({ event_id, on_date, member_id }); save(); },
-    async addItem(list_name, text, added_by, note) { db.items.push({ id: uuid(), list_name, text, note: note || null, archived: false, done: false, added_by, done_by: null, created_at: new Date().toISOString() }); save(); },
+    async addItem(list_name, text, added_by, note, assigned_to, needed_by) { db.items.push({ id: uuid(), list_name, text, note: note || null, archived: false, done: false, added_by, done_by: null, assigned_to: assigned_to || null, assigned_by: assigned_to ? added_by : null, needed_by: needed_by || null, created_at: new Date().toISOString() }); save(); },
+    async updateItem(id, fields) { const i = db.items.find((x) => x.id === id); if (i) Object.assign(i, fields); save(); },
     async setItemDone(id, done, by) { const i = db.items.find((x) => x.id === id); if (i) { i.done = done; i.done_by = done ? by : null; } save(); },
     async deleteItem(id) { db.items = db.items.filter((x) => x.id !== id); save(); },
     async clearDone(list_name) { db.items.forEach((x) => { if (x.list_name === list_name && x.done) x.archived = true; }); save(); },
