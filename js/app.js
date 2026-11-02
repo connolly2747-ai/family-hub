@@ -164,7 +164,7 @@ function itemRow(o, compact) {
   const e = o.e, c = catOf(e.category), who = assignedTo(o), rs = rsvpsFor(o);
   const time = e.all_day ? "All day" : o.start.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   if (compact) return `<div class="item sm" data-a="open" data-id="${e.id}" data-k="${o.key}" data-n="${o.k}"><div class="bar" style="background:${c.color}"></div>
-    <div class="t"><b>${doneFor(o) ? "✓ " : ""}${esc(e.title)}</b><div class="muted">${time} ${dots(who)}</div></div></div>`;
+    <div class="t"><b>${doneFor(o) ? "✓ " : ""}${(() => { const cv = coverOf(o); return cv && cv.status === "open" ? "⚠ " : ""; })()}${esc(e.title)}</b><div class="muted">${time} ${dots(who)}${e.category === "chore" && who.length ? esc(who.map(mname).join(", ")) : ""}</div></div></div>`;
   return `<div class="item" data-a="open" data-id="${e.id}" data-k="${o.key}" data-n="${o.k}">
     <div class="bar" style="background:${c.color}"></div>
     <div class="t"><b>${c.icon} ${esc(e.title)}</b> ${doneFor(o) ? `<span class="pill going">done</span>` : ""}${(() => { const cv = coverOf(o); return cv ? (cv.status === "open" ? `<span class="pill no">needs cover</span>` : `<span class="pill maybe">covered by ${esc(mname(cv.covered_by))}</span>`) : ""; })()}
