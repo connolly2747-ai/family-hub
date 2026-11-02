@@ -9,7 +9,7 @@ const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { r
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 function toast(msg, action) { const t = document.getElementById("toast"); t.innerHTML = esc(msg) + (action ? ` <button class="sm" data-a="${action.a}" style="margin-left:8px">${esc(action.label)}</button>` : ""); t.classList.add("show"); t.style.pointerEvents = action ? "auto" : "none"; clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), action ? 7000 : 2600); }
 
-let api, data = { members: [], events: [], rsvps: [], replies: [], done: [], items: [], polls: [], votes: [], tokens: [], covers: [], tickets: [], ticketVotes: [], tasks: [], taskAssignees: [] };
+let api, data = { members: [], events: [], rsvps: [], replies: [], done: [], items: [], polls: [], votes: [], tokens: [], covers: [], tickets: [], ticketVotes: [], tasks: [], taskAssignees: [], cats: [], catFeedings: [] };
 const S = {
   authed: false, loaded: false, filtersOpen: false, list: "Groceries", view: "home", cal: "month", wishKind: "wish", tasksTab: "mine", cursor: startOfDay(new Date()), sel: startOfDay(new Date()),
   me: lsGet("fh.me", ""), person: "", cats: new Set(), modal: null, loginErr: "",
@@ -59,7 +59,7 @@ function filtersHtml() {
 }
 
 function bottomNav() {
-  const v = S.view, more = ["polls", "wishes"].includes(v);
+  const v = S.view, more = ["polls", "wishes", "cats"].includes(v);
   const b = (id, ic, label, on) => `<button data-a="nav" data-v="${id}" class="${on ? "on" : ""}" ${on ? 'aria-current="page"' : ""}><span class="ic">${ic}</span><span>${label}</span></button>`;
   return `<nav class="bottomnav" aria-label="Main">${b("home", "🏠", "Home", v === "home")}${b("calendar", "📅", "Calendar", v === "calendar")}
     <button class="addbtn" data-a="new" aria-label="Add event"><span class="ic">＋</span><span>Add</span></button>
@@ -73,8 +73,8 @@ function render() {
   const m = member(S.me), n = filterCount();
   const keep = document.getElementById("quickIn"); const qv = keep ? keep.value : "";
   const home = S.view === "home", calv = S.view === "calendar", showQuick = home || calv;
-  const body = home ? agendaView() : calv ? calToggle() + (S.cal === "week" ? weekView() : monthView()) : S.view === "lists" ? listsView() : S.view === "tasks" ? tasksView() : S.view === "polls" ? pollsView() : wishesView();
-  const titles = { home: "Family Hub", calendar: "Calendar", lists: "Lists", tasks: "Tasks", polls: "Polls", wishes: "Feedback & wishes" };
+  const body = home ? agendaView() : calv ? calToggle() + (S.cal === "week" ? weekView() : monthView()) : S.view === "lists" ? listsView() : S.view === "tasks" ? tasksView() : S.view === "polls" ? pollsView() : S.view === "cats" ? catsView() : wishesView();
+  const titles = { home: "Family Hub", calendar: "Calendar", lists: "Lists", tasks: "Tasks", polls: "Polls", cats: "Cats", wishes: "Feedback & wishes" };
   $app.innerHTML = `
   <div class="wrap">
     <header class="top">
@@ -149,7 +149,7 @@ function weekView() {
     <h2>${start.toLocaleDateString([], { month: "short", day: "numeric" })} – ${addDays(start, 6).toLocaleDateString([], { month: "short", day: "numeric" })}</h2></div><div class="weekgrid">${cols}</div>`;
 }
 
-function agendaView() { return homeTasksHtml() + homeGroceryHtml() + needsCoverHtml() + needsReplyHtml() + glanceHtml() + agendaBody(); }
+function agendaView() { return homeCatsHtml() + homeTasksHtml() + homeGroceryHtml() + needsCoverHtml() + needsReplyHtml() + glanceHtml() + agendaBody(); }
 function agendaBody() {
   const from = startOfDay(new Date()), to = endOfDay(addDays(from, 90));
   const occs = occsInRange(from, to);
@@ -278,7 +278,7 @@ function openSync() {
 }
 function openMenu() {
   const d = showModal(`<div class="row spread"><h2>More</h2><button class="ghost sm" data-a="close">✕</button></div>
-    <div class="stack" style="margin-top:10px"><button data-a="nav" data-v="polls">📊 Polls</button><button data-a="nav" data-v="wishes">💡 Feedback &amp; wish list</button><button data-a="sync">📅 Sync with Google / Outlook / Apple calendar</button><button data-a="export">💾 Export everything (backup)</button>
+    <div class="stack" style="margin-top:10px"><button data-a="nav" data-v="cats">🐱 Cats</button><button data-a="nav" data-v="polls">📊 Polls</button><button data-a="nav" data-v="wishes">💡 Feedback &amp; wish list</button><button data-a="sync">📅 Sync with Google / Outlook / Apple calendar</button><button data-a="export">💾 Export everything (backup)</button>
     <button data-a="switch">👤 Switch person</button><button data-a="signout">Sign out</button></div>`);
   d.dataset.kind = "menu";
 }
@@ -476,6 +476,54 @@ function openTaskForm(t) {
   d.dataset.kind = "taskform";
 }
 
+
+/* ---------------- cats ---------------- */
+const GROUPS = [["indoor", "🏠 Catio cats"], ["outdoor", "🌳 Outdoor cats"]];
+const SLOTS = [["AM", "Morning"], ["PM", "Evening"]];
+function scheduledFeeder(slot, day = startOfDay(new Date())) {
+  const o = occsAll(day, endOfDay(day)).find((x) => x.e.category === "chore" && /feed the cats/i.test(x.e.title) && x.e.title.toUpperCase().includes(`(${slot})`));
+  return o ? { o, who: assignedTo(o)[0], done: doneFor(o) } : null;
+}
+function feedStatus(slot, grp, key) {
+  const log = data.catFeedings.find((f) => f.fed_on === key && f.slot === slot && f.grp === grp);
+  if (log) return { fed: true, by: log.fed_by, at: log.created_at, log };
+  const sch = scheduledFeeder(slot); if (sch && sch.done) return { fed: true, by: sch.done.member_id, viaChore: true };
+  return { fed: false };
+}
+function catsTodayHtml() {
+  const key = dayKey(new Date()), hr = new Date().getHours();
+  return SLOTS.map(([slot, label]) => {
+    const sch = scheduledFeeder(slot), late = !GROUPS.every(([g]) => feedStatus(slot, g, key).fed) && (slot === "AM" ? hr >= 11 : hr >= 20);
+    const cells = GROUPS.map(([g, gl]) => { const st = feedStatus(slot, g, key);
+      const who = st.fed ? (sch && sch.who && sch.who !== st.by ? `${esc(mname(st.by))} (instead of ${esc(mname(sch.who))})` : esc(mname(st.by))) : "";
+      return `<div class="fcell ${st.fed ? "fed" : late ? "late" : ""}"><div><b>${gl}</b><div class="muted">${st.fed ? `✓ fed by ${who}${st.at ? " · " + new Date(st.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : ""}` : late ? "not fed yet" : "not yet"}</div></div>
+        ${st.fed ? (st.log && st.log.fed_by === S.me ? `<button class="sm" data-a="catunfeed" data-id="${st.log.id}">Undo</button>` : "") : `<button class="sm primary" data-a="catfeed" data-slot="${slot}" data-grp="${g}">I fed them</button>`}</div>`; }).join("");
+    return `<div class="fslot"><div class="muted" style="margin-bottom:4px"><b>${label}</b>${sch && sch.who ? ` · scheduled: ${esc(mname(sch.who))}` : ""}</div><div class="fgrid">${cells}</div></div>`;
+  }).join("");
+}
+function homeCatsHtml() {
+  return `<div class="card" style="margin-bottom:10px"><div class="row spread"><h3>🐱 Cats today</h3><button class="sm" data-a="nav" data-v="cats">All cats</button></div><div class="muted" style="margin:2px 0 8px">Tapping is optional. It just lets everyone know who already fed them.</div>${catsTodayHtml()}</div>`;
+}
+function catsView() {
+  const recent = [...new Set(data.catFeedings.map((f) => f.fed_on))].sort().reverse().slice(0, 7);
+  const byKind = (k) => data.cats.filter((c) => c.kind === k);
+  const card = (c) => `<div class="item"><div class="t"><b>${esc(c.name)}</b><div class="muted">${c.notes ? esc(c.notes) : "No notes yet"}</div></div><button class="sm" data-a="catedit" data-id="${c.id}">Edit</button></div>`;
+  return `<div class="card"><h3>Today</h3><div class="muted" style="margin:2px 0 8px">Optional: tap “I fed them” if you fed the cats, scheduled or not. It also checks off the scheduled feeding.</div>${catsTodayHtml()}</div>
+    <div class="card" style="margin-top:10px"><h3>🏠 Catio cats (${byKind("indoor").length})</h3>${byKind("indoor").map(card).join("")}</div>
+    <div class="card" style="margin-top:10px"><h3>🌳 Outdoor cats (${byKind("outdoor").length})</h3>${byKind("outdoor").map(card).join("")}</div>
+    <div class="row" style="margin-top:10px"><button data-a="catadd">+ Add a cat</button></div>
+    ${recent.length ? `<div class="card" style="margin-top:10px"><h3>Recent feedings</h3>${recent.map((d) => `<div class="item sm"><div class="t"><b>${parseKey(d).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}</b><div class="muted">${data.catFeedings.filter((f) => f.fed_on === d).sort((a, b) => a.slot.localeCompare(b.slot) || a.grp.localeCompare(b.grp)).map((f) => `${f.slot === "AM" ? "Morning" : "Evening"} ${f.grp === "indoor" ? "catio" : "outdoor"}: ${esc(mname(f.fed_by))}`).join(" · ")}</div></div></div>`).join("")}</div>` : ""}`;
+}
+function openCatForm(c) {
+  S.modal = { type: "cat", id: c ? c.id : null };
+  const d = showModal(`<form id="catForm" class="stack"><div class="row spread"><h2>${c ? "Edit cat" : "Add a cat"}</h2><button type="button" class="ghost sm" data-a="close">✕</button></div>
+    <div><label>Name</label><input id="ct_name" required maxlength="40" value="${esc(c ? c.name : "")}"></div>
+    <div><label>Where do they live?</label><select id="ct_kind"><option value="indoor" ${c && c.kind === "indoor" ? "selected" : ""}>Catio (indoor)</option><option value="outdoor" ${c && c.kind === "outdoor" ? "selected" : ""}>Outdoor</option></select></div>
+    <div><label>Notes (food, meds, vet…)</label><textarea id="ct_notes" rows="3" maxlength="300">${esc(c ? c.notes || "" : "")}</textarea></div>
+    <div class="row spread">${c ? `<button type="button" data-a="catdel" data-id="${c.id}">Delete</button>` : "<span></span>"}<div class="row"><button type="button" data-a="close">Cancel</button><button class="primary" type="submit">Save</button></div></div></form>`);
+  d.dataset.kind = "catform";
+}
+
 /* ---------------- RSVP / chore helpers ---------------- */
 const rsvpsFor = (o) => data.rsvps.filter((r) => r.event_id === o.e.id && r.on_date === o.key);
 const doneFor = (o) => data.done.find((d) => d.event_id === o.e.id && d.on_date === o.key);
@@ -575,6 +623,12 @@ document.addEventListener("click", async (ev) => {
     case "view": S.view = el.dataset.v; render(); break;
     case "nav": closeModal(); S.view = el.dataset.v; window.scrollTo(0, 0); render(); break;
     case "calmode": S.cal = el.dataset.v; render(); break;
+    case "catfeed": { const slot = el.dataset.slot, grp = el.dataset.grp, key = dayKey(new Date());
+      guarded(async () => { await api.logFeeding(key, slot, grp, S.me); const sch = scheduledFeeder(slot); if (sch && !sch.done) await api.setDone(sch.o.e.id, sch.o.key, S.me); await refresh(); toast("Thanks for feeding them!"); }); break; }
+    case "catunfeed": guarded(async () => { await api.unlogFeeding(el.dataset.id); await refresh(); }); break;
+    case "catedit": openCatForm(data.cats.find((x) => x.id === el.dataset.id)); break;
+    case "catadd": openCatForm(null); break;
+    case "catdel": if (confirm("Remove this cat from the list?")) guarded(async () => { await api.deleteCat(el.dataset.id); closeModal(); await refresh(); }); break;
     case "taskstab": S.tasksTab = el.dataset.v; render(); break;
     case "tasknew": openTaskForm(null); break;
     case "taskedit": openTaskForm(data.tasks.find((x) => x.id === el.dataset.id)); break;
@@ -680,6 +734,9 @@ document.addEventListener("submit", async (ev) => {
     guarded(async () => { if (S.modal.isNew) await api.createTask({ title, details: details || null, assigned_by: S.me, priority: f.priority, due_date: due }, f.assignees);
       else await api.updateTask(f.id, { title, details: details || null, priority: f.priority, due_date: due });
       closeModal(); await refresh(); toast(S.modal === null ? "Saved" : "Saved"); }); return; }
+  if (ev.target.id === "catForm") {
+    const id = S.modal.id, name = document.getElementById("ct_name").value.trim(), kind = document.getElementById("ct_kind").value, notes = document.getElementById("ct_notes").value.trim() || null; if (!name) return;
+    guarded(async () => { await api.saveCat({ ...(id ? { id } : {}), name, kind, notes }); closeModal(); await refresh(); toast("Saved"); }); return; }
   if (ev.target.id === "wishForm") {
     const title = document.getElementById("wt").value.trim(), details = document.getElementById("wd").value.trim(); if (!title) return;
     const context = `${S.view} · ${innerWidth}x${innerHeight} · ${navigator.userAgent}`.slice(0, 290);

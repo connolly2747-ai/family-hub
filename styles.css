@@ -146,3 +146,11 @@ a.btnlink:hover{border-color:var(--accent)}
 .overdue{color:var(--no);font-weight:600}
 .bottomnav button{min-width:0}
 @media(min-width:900px){.bottomnav{width:min(700px,94%)}}
+
+/* ---- cats ---- */
+.fslot{margin-top:10px}
+.fgrid{display:grid;grid-template-columns:1fr;gap:8px}
+@media(min-width:560px){.fgrid{grid-template-columns:1fr 1fr}}
+.fcell{display:flex;justify-content:space-between;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--bg)}
+.fcell.fed{border-color:var(--going)}
+.fcell.late{border-color:var(--maybe)}

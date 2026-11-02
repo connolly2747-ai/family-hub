@@ -18,7 +18,7 @@ async function supabaseBackend() {
     },
     async signOut() { await sb.auth.signOut(); },
     async load() {
-      const [members, events, rsvps, replies, done, items, polls, votes, tokens, covers, tickets, ticketVotes, tasks, taskAssignees] = await Promise.all([
+      const [members, events, rsvps, replies, done, items, polls, votes, tokens, covers, tickets, ticketVotes, tasks, taskAssignees, cats, catFeedings] = await Promise.all([
         sb.from("members").select("*").order("sort"),
         sb.from("events").select("*").order("start_at"),
         sb.from("rsvps").select("*"),
@@ -33,15 +33,17 @@ async function supabaseBackend() {
         sb.from("ticket_votes").select("*"),
         sb.from("tasks").select("*").order("created_at", { ascending: false }),
         sb.from("task_assignees").select("*"),
+        sb.from("cats").select("*").order("sort"),
+        sb.from("cat_feedings").select("*").gte("fed_on", new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10)),
       ]);
       return { members: must(members), events: must(events), rsvps: must(rsvps), replies: must(replies), done: must(done),
-        items: must(items), polls: must(polls), votes: must(votes), tokens: must(tokens), covers: must(covers), tickets: must(tickets), ticketVotes: must(ticketVotes), tasks: must(tasks), taskAssignees: must(taskAssignees) };
+        items: must(items), polls: must(polls), votes: must(votes), tokens: must(tokens), covers: must(covers), tickets: must(tickets), ticketVotes: must(ticketVotes), tasks: must(tasks), taskAssignees: must(taskAssignees), cats: must(cats), catFeedings: must(catFeedings) };
     },
     subscribe(cb) {
       let t;
       const ping = () => { clearTimeout(t); t = setTimeout(cb, 250); };
       const ch = sb.channel("family-hub");
-      for (const table of ["events", "rsvps", "replies", "chore_done", "members", "list_items", "polls", "votes", "chore_cover", "tickets", "ticket_votes", "tasks", "task_assignees"])
+      for (const table of ["events", "rsvps", "replies", "chore_done", "members", "list_items", "polls", "votes", "chore_cover", "tickets", "ticket_votes", "tasks", "task_assignees", "cats", "cat_feedings"])
         ch.on("postgres_changes", { event: "*", schema: "public", table }, ping);
       ch.subscribe();
       return () => sb.removeChannel(ch);
@@ -70,6 +72,10 @@ async function supabaseBackend() {
     },
     async releaseCover(event_id, on_date) { must(await sb.from("chore_cover").update({ covered_by: null, status: "open" }).match({ event_id, on_date })); },
     async cancelCover(event_id, on_date) { must(await sb.from("chore_cover").delete().match({ event_id, on_date })); },
+    async logFeeding(fed_on, slot, grp, fed_by) { const r = await sb.from("cat_feedings").insert({ fed_on, slot, grp, fed_by }); if (r.error && r.error.code === "23505") throw new Error("Someone just logged that. Refreshing."); must(r); },
+    async unlogFeeding(id) { must(await sb.from("cat_feedings").delete().eq("id", id)); },
+    async saveCat(c) { must(await sb.from("cats").upsert(c)); },
+    async deleteCat(id) { must(await sb.from("cats").delete().eq("id", id)); },
     async createTask(task, assignees) { const row = must(await sb.from("tasks").insert(task).select().single()); must(await sb.from("task_assignees").insert(assignees.map((member_id) => ({ task_id: row.id, member_id })))); },
     async updateTask(id, fields) { must(await sb.from("tasks").update(fields).eq("id", id)); },
     async deleteTask(id) { must(await sb.from("tasks").delete().eq("id", id)); },
@@ -99,7 +105,8 @@ function demoBackend() {
   let db;
   try { db = JSON.parse(localStorage.getItem(KEY)); } catch { db = null; }
   if (!db) db = {};
-  for (const k of ["events", "rsvps", "replies", "done", "items", "polls", "votes", "tokens", "covers", "tickets", "ticketVotes", "tasks", "taskAssignees"]) db[k] = db[k] || [];
+  for (const k of ["events", "rsvps", "replies", "done", "items", "polls", "votes", "tokens", "covers", "tickets", "ticketVotes", "tasks", "taskAssignees", "cats", "catFeedings"]) db[k] = db[k] || [];
+  if (!db.cats.length) db.cats = [["Sonoma","outdoor"],["Casper","outdoor"],["Meatloaf","indoor"],["Muffin","indoor"],["Felix","indoor"],["Tabitha","indoor"],["Totoro","indoor"],["Maverick","indoor"],["Cleo","indoor"]].map(([name, kind], i) => ({ id: uuid(), name, kind, notes: null, sort: i + 1 }));
   if (!db.tokens.length) db.tokens = members.map((m) => ({ member_id: m.id, token: newToken() }));
   const listeners = new Set();
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch {} listeners.forEach((f) => f()); };
@@ -125,6 +132,10 @@ function demoBackend() {
     async takeCover(event_id, on_date, member_id) { const c = db.covers.find((x) => x.event_id === event_id && x.on_date === on_date && x.status === "open"); if (!c) throw new Error("Someone else just took that shift."); c.covered_by = member_id; c.status = "covered"; save(); },
     async releaseCover(event_id, on_date) { const c = db.covers.find((x) => x.event_id === event_id && x.on_date === on_date); if (c) { c.covered_by = null; c.status = "open"; } save(); },
     async cancelCover(event_id, on_date) { db.covers = db.covers.filter((x) => !(x.event_id === event_id && x.on_date === on_date)); save(); },
+    async logFeeding(fed_on, slot, grp, fed_by) { if (db.catFeedings.some((x) => x.fed_on === fed_on && x.slot === slot && x.grp === grp)) throw new Error("Someone just logged that. Refreshing."); db.catFeedings.push({ id: uuid(), fed_on, slot, grp, fed_by, created_at: new Date().toISOString() }); save(); },
+    async unlogFeeding(id) { db.catFeedings = db.catFeedings.filter((x) => x.id !== id); save(); },
+    async saveCat(c) { const i = db.cats.findIndex((x) => x.id === c.id); if (i >= 0) db.cats[i] = { ...db.cats[i], ...c }; else db.cats.push({ id: uuid(), sort: db.cats.length + 1, ...c }); save(); },
+    async deleteCat(id) { db.cats = db.cats.filter((x) => x.id !== id); save(); },
     async createTask(task, assignees) { const id = uuid(); db.tasks.unshift({ id, created_at: new Date().toISOString(), ...task }); assignees.forEach((m) => db.taskAssignees.push({ task_id: id, member_id: m, status: "assigned", seen_at: null, done_at: null, due_override: null, ext_status: null, ext_date: null, ext_note: null })); save(); },
     async updateTask(id, fields) { const t = db.tasks.find((x) => x.id === id); if (t) Object.assign(t, fields); save(); },
     async deleteTask(id) { db.tasks = db.tasks.filter((x) => x.id !== id); db.taskAssignees = db.taskAssignees.filter((x) => x.task_id !== id); save(); },
