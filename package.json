@@ -1,0 +1,8 @@
+{
+  "name": "family-hub",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Private family calendar, tasks, groceries and cat care.",
+  "scripts": { "test": "node test/ics.test.js" },
+  "dependencies": { "web-push": "^3.6.7" }
+}

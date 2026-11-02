@@ -1,5 +1,5 @@
 import { createApi, uuid } from "./api.js";
-import { ADMIN_IDS } from "./config.js";
+import { ADMIN_IDS, VAPID_PUBLIC_KEY } from "./config.js";
 import { CATEGORIES, catOf } from "./categories.js";
 import { occurrences, occursOn, dayKey, parseKey, startOfDay, endOfDay, addDays, whenText, monthLabel, dayLabel } from "./dates.js";
 
@@ -9,9 +9,9 @@ const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { r
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 function toast(msg, action) { const t = document.getElementById("toast"); t.innerHTML = esc(msg) + (action ? ` <button class="sm" data-a="${action.a}" style="margin-left:8px">${esc(action.label)}</button>` : ""); t.classList.add("show"); t.style.pointerEvents = action ? "auto" : "none"; clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), action ? 7000 : 2600); }
 
-let api, data = { members: [], events: [], rsvps: [], replies: [], done: [], items: [], polls: [], votes: [], tokens: [], covers: [], tickets: [], ticketVotes: [], tasks: [], taskAssignees: [], cats: [], catFeedings: [] };
+let api, data = { members: [], events: [], rsvps: [], replies: [], done: [], items: [], polls: [], votes: [], tokens: [], covers: [], tickets: [], ticketVotes: [], tasks: [], taskAssignees: [], cats: [], catFeedings: [], notifications: [] };
 const S = {
-  authed: false, loaded: false, filtersOpen: false, list: "Groceries", view: "home", cal: "month", wishKind: "wish", tasksTab: "mine", cursor: startOfDay(new Date()), sel: startOfDay(new Date()),
+  authed: false, loaded: false, filtersOpen: false, list: "Groceries", view: "home", cal: "month", wishKind: "wish", tasksTab: "mine", push: "unknown", seenN: null, cursor: startOfDay(new Date()), sel: startOfDay(new Date()),
   me: lsGet("fh.me", ""), person: "", cats: new Set(), modal: null, loginErr: "",
 };
 const member = (id) => data.members.find((m) => m.id === id);
@@ -35,7 +35,7 @@ function visible(o) {
 }
 function occsInRange(from, to) {
   const all = [];
-  for (const e of data.events) for (const o of occurrences(e, from, to)) if (visible(o)) all.push(o);
+  for (const e of data.events) { if (e.section === "cats") continue; for (const o of occurrences(e, from, to)) if (visible(o)) all.push(o); }
   return all.sort((a, b) => a.start - b.start || a.e.title.localeCompare(b.e.title));
 }
 
@@ -59,7 +59,7 @@ function filtersHtml() {
 }
 
 function bottomNav() {
-  const v = S.view, more = ["polls", "wishes", "cats"].includes(v);
+  const v = S.view, more = ["polls", "wishes", "cats", "inbox"].includes(v);
   const b = (id, ic, label, on) => `<button data-a="nav" data-v="${id}" class="${on ? "on" : ""}" ${on ? 'aria-current="page"' : ""}><span class="ic">${ic}</span><span>${label}</span></button>`;
   return `<nav class="bottomnav" aria-label="Main">${b("home", "🏠", "Home", v === "home")}${b("calendar", "📅", "Calendar", v === "calendar")}
     <button class="addbtn" data-a="new" aria-label="Add event"><span class="ic">＋</span><span>Add</span></button>
@@ -70,15 +70,16 @@ function render() {
   if (!S.loaded) { $app.innerHTML = `<div class="login"><p class="muted">Loading…</p></div>`; return; }
   if (!S.authed) return renderLogin();
   if (!S.me) return renderWho();
-  const m = member(S.me), n = filterCount();
+  const m = member(S.me), n = filterCount(), unread = myUnread();
   const keep = document.getElementById("quickIn"); const qv = keep ? keep.value : "";
   const home = S.view === "home", calv = S.view === "calendar", showQuick = home || calv;
-  const body = home ? agendaView() : calv ? calToggle() + (S.cal === "week" ? weekView() : monthView()) : S.view === "lists" ? listsView() : S.view === "tasks" ? tasksView() : S.view === "polls" ? pollsView() : S.view === "cats" ? catsView() : wishesView();
-  const titles = { home: "Family Hub", calendar: "Calendar", lists: "Lists", tasks: "Tasks", polls: "Polls", cats: "Cats", wishes: "Feedback & wishes" };
+  const body = home ? agendaView() : calv ? calToggle() + (S.cal === "week" ? weekView() : monthView()) : S.view === "lists" ? listsView() : S.view === "tasks" ? tasksView() : S.view === "polls" ? pollsView() : S.view === "cats" ? catsView() : S.view === "inbox" ? inboxView() : wishesView();
+  const titles = { home: "Family Hub", calendar: "Calendar", lists: "Lists", tasks: "Tasks", polls: "Polls", cats: "Cats", inbox: "Notifications", wishes: "Feedback & wishes" };
   $app.innerHTML = `
   <div class="wrap">
     <header class="top">
       <div><h1>${titles[S.view] || "Family Hub"}</h1><div class="muted">Hi <b>${esc(m ? m.name : S.me)}</b> · <a href="#" data-a="switch">not you?</a>${api.name === "demo" ? " · <b>demo mode</b>" : ""}</div></div>
+      <button class="bell ${S.view === "inbox" ? "on" : ""}" data-a="nav" data-v="inbox" aria-label="Notifications${unread ? ", " + unread + " unread" : ""}">🔔${unread ? `<span class="bdg">${unread > 9 ? "9+" : unread}</span>` : ""}</button>
     </header>
     <div class="layout ${calv ? "" : "single"}">
       ${calv ? `<aside class="side ${S.filtersOpen ? "open" : ""}">${filtersHtml()}</aside>` : ""}
@@ -93,6 +94,7 @@ function render() {
   </div>
   ${bottomNav()}`;
   if (keep && qv) { const el = document.getElementById("quickIn"); if (el) el.value = qv; }
+  try { if (navigator.setAppBadge) (unread ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {}); } catch {}
 }
 const calToggle = () => `<div class="row tabs" style="margin-bottom:10px"><button data-a="calmode" data-v="month" class="${S.cal === "month" ? "on" : ""}">Month</button><button data-a="calmode" data-v="week" class="${S.cal === "week" ? "on" : ""}">Week</button></div>`;
 
@@ -175,8 +177,13 @@ function itemRow(o, compact) {
 /* ---------------- quick add ---------------- */
 const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 function parseQuick(text) {
-  let t = " " + text.trim() + " ", date = startOfDay(new Date()), hasTime = false, h = 18, mi = 0;
-  const tm = t.match(/\s(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+  let t = " " + text.trim().replace(/\bnoon\b/gi, "12pm").replace(/\bmidnight\b/gi, "12am") + " ", date = startOfDay(new Date()), hasTime = false, h = 18, mi = 0, endH = null, endMi = 0;
+  const rg = t.match(/\s(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:-|–|to|until)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+  if (rg) { const h24 = (hh, mer) => (Number(hh) % 12) + (mer.toLowerCase() === "pm" ? 12 : 0); const m2 = rg[6];
+    let m1 = rg[3] || m2; let s1 = h24(rg[1], m1); const e1 = h24(rg[4], m2);
+    if (!rg[3] && s1 >= e1 && s1 - 12 >= 0) { s1 = h24(rg[1], "am"); }
+    h = s1; mi = Number(rg[2] || 0); endH = e1; endMi = Number(rg[5] || 0); hasTime = true; t = t.replace(rg[0], " "); }
+  const tm = rg ? null : t.match(/\s(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
   if (tm) { h = Number(tm[1]) % 12 + (tm[3].toLowerCase() === "pm" ? 12 : 0); mi = Number(tm[2] || 0); hasTime = true; t = t.replace(tm[0], " "); }
   const dm = t.match(/\s(today|tonight|tomorrow|sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat)[a-z]*\b/i) || null;
   if (dm) {
@@ -192,7 +199,8 @@ function parseQuick(text) {
     : /feed|trash|laundry|dishes|chore/.test(low) ? "chore" : "general";
   const c = catOf(category);
   const start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), h, mi);
-  return { title, category, start_at: start.toISOString(), all_day: !hasTime && ["school", "birthday", "trip"].includes(category),
+  let end_at = null; if (endH !== null) { let en = new Date(date.getFullYear(), date.getMonth(), date.getDate(), endH, endMi); if (en <= start) en = new Date(en.getTime() + 864e5); end_at = en.toISOString(); }
+  return { title, category, start_at: start.toISOString(), end_at, all_day: !hasTime && ["school", "birthday", "trip"].includes(category),
     rsvp_enabled: c.rsvp, replies_enabled: c.replies, recurrence: c.rec,
     member_ids: (() => { const named = data.members.filter((m) => new RegExp("\\b" + m.name + "\\b", "i").test(title)).map((m) => m.id);
       return named.length ? named : ["work", "school", "away", "appointment"].includes(category) ? [S.me] : []; })() };
@@ -278,7 +286,7 @@ function openSync() {
 }
 function openMenu() {
   const d = showModal(`<div class="row spread"><h2>More</h2><button class="ghost sm" data-a="close">✕</button></div>
-    <div class="stack" style="margin-top:10px"><button data-a="nav" data-v="cats">🐱 Cats</button><button data-a="nav" data-v="polls">📊 Polls</button><button data-a="nav" data-v="wishes">💡 Feedback &amp; wish list</button><button data-a="sync">📅 Sync with Google / Outlook / Apple calendar</button><button data-a="export">💾 Export everything (backup)</button>
+    <div class="stack" style="margin-top:10px"><button data-a="nav" data-v="inbox">🔔 Notifications</button><button data-a="nav" data-v="cats">🐱 Cats</button><button data-a="nav" data-v="polls">📊 Polls</button><button data-a="nav" data-v="wishes">💡 Feedback &amp; wish list</button><button data-a="sync">📅 Sync with Google / Outlook / Apple calendar</button><button data-a="export">💾 Export everything (backup)</button>
     <button data-a="switch">👤 Switch person</button><button data-a="signout">Sign out</button></div>`);
   d.dataset.kind = "menu";
 }
@@ -420,6 +428,12 @@ function taskSort(a, b, who) {
 }
 const taskOpen = (t) => asgOf(t).some((a) => a.status !== "done");
 
+function defaultTasksTab() { // land where there's something for you to do
+  const pending = data.taskAssignees.some((a) => a.ext_status === "pending" && (data.tasks.find((t) => t.id === a.task_id) || {}).assigned_by === S.me && a.member_id !== S.me);
+  const mineOpen = data.tasks.some((t) => asgOf(t).some((a) => a.member_id === S.me && a.status !== "done"));
+  const assignedOpen = data.tasks.some((t) => t.assigned_by === S.me && taskOpen(t));
+  return pending || (!mineOpen && assignedOpen) ? "assigned" : "mine";
+}
 function homeTasksHtml() {
   const mine = data.tasks.filter((t) => asgOf(t).some((a) => a.member_id === S.me && a.status !== "done")).sort((a, b) => taskSort(a, b, S.me));
   const unseen = mine.filter((t) => asgOf(t).find((a) => a.member_id === S.me).status === "assigned").length;
@@ -454,7 +468,7 @@ function taskCard(t) {
       : `<div class="muted">⏳ ${mine ? "Waiting for " + esc(mname(t.assigned_by)) + " to answer your request" : "Asked to move to " + dueText(a.ext_date, true).replace("Was due ", "")}</div>`;
     else if (a.ext_status === "declined" && mine) ext = `<div class="muted">${esc(mname(t.assigned_by))} kept the original deadline.</div>`;
     else if (a.ext_status === "approved" && a.due_override) ext = `<div class="muted">Deadline moved by ${esc(mname(t.assigned_by))}.</div>`;
-    const ask = mine && a.status !== "done" && a.ext_status !== "pending" ? `<details class="cover"><summary>Need more time?</summary><div class="stack" style="margin-top:8px"><input type="date" id="xd-${t.id}" min="${todayKey()}"><input id="xn-${t.id}" maxlength="200" placeholder="Why? (optional)"><button class="sm primary" data-a="extreq" data-id="${t.id}" data-m="${a.member_id}">Ask for new deadline</button></div></details>` : "";
+    const ask = mine && due && a.status !== "done" && a.ext_status !== "pending" ? `<details class="cover"><summary>Need more time?</summary><div class="stack" style="margin-top:8px"><input type="date" id="xd-${t.id}" min="${todayKey()}"><input id="xn-${t.id}" maxlength="200" placeholder="Why? (optional)"><button class="sm primary" data-a="extreq" data-id="${t.id}" data-m="${a.member_id}">Ask for new deadline</button></div></details>` : "";
     return `<div class="arow"><div class="row"><span class="pdot" style="background:${m.color}"></span><b>${esc(mname(a.member_id))}${mine ? " (you)" : ""}</b>${stat}<span class="muted ${isOverdue(due, a.status === "done") ? "overdue" : ""}">${dueText(due, a.status === "done")}</span></div>
       ${acts ? `<div class="row" style="margin-top:6px">${acts}</div>` : ""}${ext}${ask}</div>`; }).join("");
   return `<div class="card task prio-${t.priority} ${allDone ? "past" : ""}" style="margin-top:10px"><div class="row spread" style="align-items:flex-start;flex-wrap:nowrap"><div><b>${esc(t.title)}</b>
@@ -504,11 +518,21 @@ function catsTodayHtml() {
 function homeCatsHtml() {
   return `<div class="card" style="margin-bottom:10px"><div class="row spread"><h3>🐱 Cats today</h3><button class="sm" data-a="nav" data-v="cats">All cats</button></div><div class="muted" style="margin:2px 0 8px">Tapping is optional. It just lets everyone know who already fed them.</div>${catsTodayHtml()}</div>`;
 }
+function catScheduleHtml() {
+  const start = addDays(startOfDay(new Date()), -new Date().getDay()), days = [0, 1, 2, 3, 4, 5, 6].map((i) => addDays(start, i));
+  const occs = occsAll(start, endOfDay(days[6])).filter((o) => o.e.section === "cats");
+  const cell = (d, slot) => { const o = occs.find((x) => occursOn(x, d) && x.e.title.toUpperCase().includes(`(${slot})`)); if (!o) return `<td><span class="muted">·</span></td>`;
+    const cv = coverOf(o), w = assignedTo(o)[0], dn = doneFor(o);
+    return `<td><button class="sm gcell ${cv && cv.status === "open" ? "warnc" : ""} ${w === S.me ? "me" : ""}" data-a="open" data-id="${o.e.id}" data-k="${o.key}" data-n="${o.k}">${cv && cv.status === "open" ? "⚠ " : ""}${dn ? "✓ " : ""}${esc(mname(w))}</button></td>`; };
+  return `<div class="card" style="margin-top:10px"><h3>Feeding schedule this week</h3><div class="muted" style="margin-bottom:6px">Tap a name to ask for cover or mark it done. It repeats every week.</div><div class="glance"><table><thead><tr><th></th>${days.map((d) => `<th class="${isToday(dayKey(d)) ? "today" : ""}">${d.toLocaleDateString([], { weekday: "short" })}<div class="muted">${d.getDate()}</div></th>`).join("")}</tr></thead>
+    <tbody>${SLOTS.map(([slot, label]) => `<tr><th class="who">${label}</th>${days.map((d) => cell(d, slot)).join("")}</tr>`).join("")}</tbody></table></div></div>`;
+}
 function catsView() {
   const recent = [...new Set(data.catFeedings.map((f) => f.fed_on))].sort().reverse().slice(0, 7);
   const byKind = (k) => data.cats.filter((c) => c.kind === k);
   const card = (c) => `<div class="item"><div class="t"><b>${esc(c.name)}</b><div class="muted">${c.notes ? esc(c.notes) : "No notes yet"}</div></div><button class="sm" data-a="catedit" data-id="${c.id}">Edit</button></div>`;
   return `<div class="card"><h3>Today</h3><div class="muted" style="margin:2px 0 8px">Optional: tap “I fed them” if you fed the cats, scheduled or not. It also checks off the scheduled feeding.</div>${catsTodayHtml()}</div>
+    ${catScheduleHtml()}
     <div class="card" style="margin-top:10px"><h3>🏠 Catio cats (${byKind("indoor").length})</h3>${byKind("indoor").map(card).join("")}</div>
     <div class="card" style="margin-top:10px"><h3>🌳 Outdoor cats (${byKind("outdoor").length})</h3>${byKind("outdoor").map(card).join("")}</div>
     <div class="row" style="margin-top:10px"><button data-a="catadd">+ Add a cat</button></div>
@@ -522,6 +546,62 @@ function openCatForm(c) {
     <div><label>Notes (food, meds, vet…)</label><textarea id="ct_notes" rows="3" maxlength="300">${esc(c ? c.notes || "" : "")}</textarea></div>
     <div class="row spread">${c ? `<button type="button" data-a="catdel" data-id="${c.id}">Delete</button>` : "<span></span>"}<div class="row"><button type="button" data-a="close">Cancel</button><button class="primary" type="submit">Save</button></div></div></form>`);
   d.dataset.kind = "catform";
+}
+
+
+/* ---------------- notifications ---------------- */
+const myNotifs = () => data.notifications.filter((n) => n.member_id === S.me).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+const myUnread = () => data.notifications.filter((n) => n.member_id === S.me && !n.read_at).length;
+const NOTIF_ICON = { task: "✅", task_seen: "👀", task_done: "🎉", extension: "⏳", cover: "🐱", grocery: "🛒", ticket: "💡" };
+const timeAgo = (iso) => { const m = Math.round((Date.now() - new Date(iso)) / 6e4); return m < 1 ? "just now" : m < 60 ? m + "m ago" : m < 1440 ? Math.round(m / 60) + "h ago" : new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" }); };
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent);
+const isStandalone = () => (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+async function updatePushState() {
+  let st;
+  if (!pushSupported()) st = isIOS() && !isStandalone() ? "needs-install" : "unsupported";
+  else if (Notification.permission === "denied") st = "denied";
+  else { try { const reg = await navigator.serviceWorker.ready; st = (await reg.pushManager.getSubscription()) ? "on" : "off"; } catch { st = "off"; } }
+  if (st !== S.push) { S.push = st; if (S.view === "inbox") render(); }
+}
+const b64u = (b) => { const p = "=".repeat((4 - (b.length % 4)) % 4), r = atob((b + p).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from([...r].map((c) => c.charCodeAt(0))); };
+async function enablePush() {
+  if (!pushSupported()) { toast("This browser can't do lock-screen alerts."); return; }
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") { toast("Alerts weren't allowed. You can change this in your phone's Settings."); await updatePushState(); return; }
+  const reg = await navigator.serviceWorker.ready;
+  const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64u(VAPID_PUBLIC_KEY) });
+  const j = sub.toJSON(); await api.saveSubscription({ endpoint: j.endpoint, member_id: S.me, p256dh: j.keys.p256dh, auth: j.keys.auth, user_agent: navigator.userAgent.slice(0, 290) });
+  S.push = "on"; render(); toast("Lock-screen alerts are on for this device.");
+}
+async function disablePush() {
+  try { const reg = await navigator.serviceWorker.ready, sub = await reg.pushManager.getSubscription(); if (sub) { const ep = sub.endpoint; await sub.unsubscribe(); await api.removeSubscription(ep); } } catch {}
+  S.push = "off"; render(); toast("Alerts turned off for this device.");
+}
+async function syncPushOwner() { // if this device is subscribed and a different person signs in, move the alerts to them
+  try { if (!pushSupported() || Notification.permission !== "granted") return; const reg = await navigator.serviceWorker.ready, sub = await reg.pushManager.getSubscription(); if (!sub) return;
+    const j = sub.toJSON(); await api.saveSubscription({ endpoint: j.endpoint, member_id: S.me, p256dh: j.keys.p256dh, auth: j.keys.auth, user_agent: navigator.userAgent.slice(0, 290) }); } catch {}
+}
+function goTarget(t) {
+  closeModal();
+  if (t === "tasks_assigned") { S.view = "tasks"; S.tasksTab = "assigned"; } else if (t === "tasks") { S.view = "tasks"; S.tasksTab = "mine"; }
+  else if (["lists", "calendar", "cats", "wishes", "polls", "inbox", "home"].includes(t)) S.view = t; else S.view = "home";
+  window.scrollTo(0, 0); render();
+}
+function inboxView() {
+  const list = myNotifs(), unread = list.filter((n) => !n.read_at).length;
+  const pushCard = {
+    on: `<div class="row spread"><div>✅ <b>Lock-screen alerts are on</b> for this device.</div><button class="sm" data-a="pushoff">Turn off</button></div>`,
+    off: `<div class="row spread"><div>🔔 <b>Get alerts on your lock screen</b><div class="muted">New tasks, deadline requests, cover requests and groceries assigned to you.</div></div><button class="sm primary" data-a="pushon">Turn on</button></div>`,
+    denied: `<div>🔕 <b>Alerts are blocked.</b><div class="muted">Open your phone's Settings → Family Hub (or Safari → this site) → Notifications → Allow, then come back.</div></div>`,
+    "needs-install": `<div>📲 <b>To get lock-screen alerts on iPhone,</b> add Family Hub to your Home Screen first (Share → Add to Home Screen), then open it from the icon and turn alerts on here.</div>`,
+    unsupported: `<div class="muted">This browser doesn't support lock-screen alerts. You'll still see everything here.</div>`,
+    unknown: `<div class="muted">Checking alert settings…</div>`,
+  }[S.push] || "";
+  return `<div class="card">${pushCard}</div>
+    <div class="row spread" style="margin:12px 0 4px"><h3>${unread ? `${unread} unread` : "All caught up"}</h3>${unread ? `<button class="sm" data-a="markall">Mark all read</button>` : ""}</div>
+    ${list.length ? list.slice(0, 60).map((n) => `<div class="card notif ${n.read_at ? "" : "unread"}" style="margin-top:8px" data-a="notif" data-id="${n.id}" data-target="${esc(n.target)}"><div class="row" style="flex-wrap:nowrap;align-items:flex-start"><span style="font-size:1.4rem">${NOTIF_ICON[n.kind] || "🔔"}</span>
+      <div class="t" style="flex:1"><b>${esc(n.title)}</b>${n.body ? `<div>${esc(n.body)}</div>` : ""}<div class="muted">${timeAgo(n.created_at)}</div></div>${n.read_at ? "" : `<span class="udot"></span>`}</div></div>`).join("") : `<div class="card" style="margin-top:8px"><p class="muted">Nothing yet. You'll see new tasks, deadline requests, cover requests and grocery assignments here.</p></div>`}`;
 }
 
 /* ---------------- RSVP / chore helpers ---------------- */
@@ -604,6 +684,7 @@ function openForm(ev, defaults = {}) {
     <div><label>Where</label><input id="f_place" maxlength="120" value="${esc(f.place || "")}"></div>
     <details class="more-opts" ${f.notes || (!S.modal.isNew) ? "open" : ""}><summary class="muted" style="cursor:pointer">More options (notes, RSVPs, replies)</summary><div class="stack" style="margin-top:10px">
     <div><label>Notes</label><textarea id="f_notes" rows="3" maxlength="1000">${esc(f.notes || "")}</textarea></div>
+    <label style="display:flex;gap:6px;align-items:center;color:var(--ink);font-size:.95rem"><input type="checkbox" id="f_cats" style="width:auto" ${f.section === "cats" ? "checked" : ""}> 🐱 Cat care (show on the Cats page, not the main calendar)</label>
     <div class="row"><label style="display:flex;gap:6px;align-items:center;color:var(--ink);font-size:.95rem"><input type="checkbox" id="f_rsvp" style="width:auto" ${f.rsvp_enabled ? "checked" : ""}> Ask for RSVPs</label>
       <label style="display:flex;gap:6px;align-items:center;color:var(--ink);font-size:.95rem"><input type="checkbox" id="f_rep" style="width:auto" ${f.replies_enabled ? "checked" : ""}> Allow replies</label></div></div></details>
     <div class="err" id="f_err"></div>
@@ -612,8 +693,13 @@ function openForm(ev, defaults = {}) {
 }
 
 /* ---------------- actions ---------------- */
+function announceNew() {
+  const mine = data.notifications.filter((n) => n.member_id === S.me && !n.read_at);
+  if (S.seenN) { const fresh = mine.filter((n) => !S.seenN.has(n.id)); if (fresh.length && S.view !== "inbox") toast("🔔 " + fresh[0].title + (fresh.length > 1 ? ` (+${fresh.length - 1} more)` : ""), { a: "gotoinbox", label: "View" }); }
+  S.seenN = new Set(mine.map((n) => n.id));
+}
 async function guarded(fn) { try { await fn(); } catch (err) { console.error(err); toast("Couldn't save: " + (err.message || err)); } }
-async function refresh() { data = await api.load(); render(); if (S.modal && S.modal.type === "detail") drawDetail(); }
+async function refresh() { data = await api.load(); announceNew(); render(); if (S.modal && S.modal.type === "detail") drawDetail(); }
 
 document.addEventListener("click", async (ev) => {
   const el = ev.target.closest("[data-a]"); if (!el) return;
@@ -621,8 +707,13 @@ document.addEventListener("click", async (ev) => {
   if (el.tagName === "A") ev.preventDefault();
   switch (a) {
     case "view": S.view = el.dataset.v; render(); break;
-    case "nav": closeModal(); S.view = el.dataset.v; window.scrollTo(0, 0); render(); break;
+    case "nav": closeModal(); S.view = el.dataset.v; if (S.view === "tasks") S.tasksTab = defaultTasksTab(); window.scrollTo(0, 0); render(); break;
     case "calmode": S.cal = el.dataset.v; render(); break;
+    case "gotoinbox": S.view = "inbox"; render(); break;
+    case "notif": { const n = data.notifications.find((x) => x.id === el.dataset.id); if (n && !n.read_at) { n.read_at = new Date().toISOString(); api.markRead([n.id]).catch(() => {}); } goTarget(el.dataset.target); break; }
+    case "markall": guarded(async () => { await api.markAllRead(S.me); await refresh(); }); break;
+    case "pushon": enablePush().catch((e) => toast("Couldn't turn on alerts: " + (e.message || e))); break;
+    case "pushoff": disablePush(); break;
     case "catfeed": { const slot = el.dataset.slot, grp = el.dataset.grp, key = dayKey(new Date());
       guarded(async () => { await api.logFeeding(key, slot, grp, S.me); const sch = scheduledFeeder(slot); if (sch && !sch.done) await api.setDone(sch.o.e.id, sch.o.key, S.me); await refresh(); toast("Thanks for feeding them!"); }); break; }
     case "catunfeed": guarded(async () => { await api.unlogFeeding(el.dataset.id); await refresh(); }); break;
@@ -639,6 +730,7 @@ document.addEventListener("click", async (ev) => {
       guarded(async () => { await api.setTaskStatus(el.dataset.id, el.dataset.m, st); await refresh(); toast(a === "taskseen" ? "Got it. They'll see you've seen it." : a === "taskdone" ? "Marked done. Nice!" : "Reopened"); }); break; }
     case "extreq": { const id = el.dataset.id, m = el.dataset.m, date = (document.getElementById("xd-" + id) || {}).value, note = ((document.getElementById("xn-" + id) || {}).value || "").trim(); const t = data.tasks.find((x) => x.id === id);
       if (!date) { toast("Pick the new deadline first"); break; }
+      { const cur = effDue(t, data.taskAssignees.find((x) => x.task_id === id && x.member_id === m)); if (date < todayKey() || (cur && date <= cur)) { toast(cur ? "Pick a date after the current deadline (" + parseKey(cur).toLocaleDateString([], { month: "short", day: "numeric" }) + ")" : "Pick a date in the future"); break; } }
       guarded(async () => { await api.requestExtension(id, m, date, note); if (t.assigned_by === m) await api.decideExtension(id, m, true, date); await refresh(); toast(t.assigned_by === m ? "Deadline moved" : "Request sent to " + mname(t.assigned_by)); }); break; }
     case "extapprove": case "extdecline": { const a2 = data.taskAssignees.find((x) => x.task_id === el.dataset.id && x.member_id === el.dataset.m);
       guarded(async () => { await api.decideExtension(a2.task_id, a2.member_id, a === "extapprove", a2.ext_date); await refresh(); toast(a === "extapprove" ? "Deadline moved" : "Kept the original deadline"); }); break; }
@@ -669,7 +761,7 @@ document.addEventListener("click", async (ev) => {
     case "undo": if (S.lastDeleted) { const e = S.lastDeleted; S.lastDeleted = null; guarded(async () => { await api.saveEvent(e); await refresh(); toast("Restored (RSVPs and replies weren't kept)"); }); } break;
     case "person": S.person = el.dataset.id; render(); break;
     case "cat": S.cats.has(el.dataset.id) ? S.cats.delete(el.dataset.id) : S.cats.add(el.dataset.id); render(); break;
-        case "iam": S.me = el.dataset.id; lsSet("fh.me", S.me); render(); break;
+        case "iam": S.me = el.dataset.id; lsSet("fh.me", S.me); S.seenN = new Set(data.notifications.filter((n) => n.member_id === S.me && !n.read_at).map((n) => n.id)); syncPushOwner(); render(); break;
     case "switch": closeModal(); S.me = ""; lsSet("fh.me", ""); render(); break;
     case "signout": closeModal(); await api.signOut(); S.authed = false; render(); break;
     case "menu": openMenu(); break;
@@ -766,7 +858,7 @@ document.addEventListener("submit", async (ev) => {
     if (f.category === "chore" && !f.rotation.length && !f.member_ids.length) { /* family-wide chore is fine */ }
     const row = { id: f.id, title: g("f_title").value.trim(), category: g("f_cat").value, start_at: s.toISOString(), end_at: en ? en.toISOString() : null, all_day: all,
       place: g("f_place").value.trim() || null, notes: g("f_notes").value.trim() || null, member_ids: f.member_ids, rotation: g("f_cat").value === "chore" ? f.rotation : [],
-      recurrence: g("f_rec").value, rsvp_enabled: g("f_rsvp").checked, replies_enabled: g("f_rep").checked, added_by: S.modal.isNew ? S.me : f.added_by };
+      recurrence: g("f_rec").value, rsvp_enabled: g("f_rsvp").checked, replies_enabled: g("f_rep").checked, added_by: S.modal.isNew ? S.me : f.added_by, section: g("f_cats").checked ? "cats" : null };
     guarded(async () => { await api.saveEvent(row); closeModal(); S.sel = startOfDay(s); S.cursor = startOfDay(s); await refresh(); toast("Saved"); });
   }
 });
@@ -774,11 +866,13 @@ document.addEventListener("submit", async (ev) => {
 /* ---------------- boot ---------------- */
 let unsub = null;
 async function boot2() {
-  data = await api.load();
+  data = await api.load(); S.seenN = new Set(data.notifications.filter((n) => n.member_id === S.me && !n.read_at).map((n) => n.id));
   if (S.me && !member(S.me)) S.me = "";
   if (unsub) unsub();
   unsub = api.subscribe(() => refresh().catch(console.error));
-  render();
+  const go = new URLSearchParams(location.search).get("go"); if (go) { history.replaceState(null, "", location.pathname); goTarget(go); } else render();
+  updatePushState();
+  if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.type === "go") goTarget(e.data.target); });
 }
 (async function boot() {
   render();

@@ -154,3 +154,13 @@ a.btnlink:hover{border-color:var(--accent)}
 .fcell{display:flex;justify-content:space-between;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--bg)}
 .fcell.fed{border-color:var(--going)}
 .fcell.late{border-color:var(--maybe)}
+
+/* ---- notifications, cat schedule, long-word safety ---- */
+.bell{position:relative;font-size:1.3rem;padding:6px 10px;border-radius:99px;line-height:1}
+.bell.on{border-color:var(--accent)}
+.bdg{position:absolute;top:-6px;right:-6px;background:var(--no);color:#fff;font-size:.68rem;min-width:18px;height:18px;border-radius:99px;display:grid;place-items:center;padding:0 4px;font-weight:700}
+.notif{cursor:pointer}
+.notif.unread{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,var(--card))}
+.udot{width:10px;height:10px;border-radius:50%;background:var(--accent);flex:none;margin-top:6px}
+.gcell{min-width:56px}.gcell.me{border-color:var(--accent);font-weight:700}.gcell.warnc{border-color:var(--no)}
+.t,.card,.arow,.reply,dialog,h2,h3,.opt .lbl,.pill{overflow-wrap:anywhere}
