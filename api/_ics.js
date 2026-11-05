@@ -63,7 +63,7 @@ function fold(line) { // 75-octet folding
   while (i < buf.length) { let len = first ? 75 : 74; let end = Math.min(i + len, buf.length); while (end < buf.length && (buf[end] & 0xc0) === 0x80) end--; chunks.push(buf.slice(i, end).toString("utf8")); i = end; first = false; }
   return chunks.join("\r\n ");
 }
-const CAT_LABEL = { general: "Event", work: "Work", school: "School", away: "Away", holiday: "Holiday", chore: "Chore", appointment: "Appointment", birthday: "Birthday", meal: "Meal", trip: "Trip" };
+const CAT_LABEL = { general: "Event", work: "Work", school: "School", away: "Away", holiday: "Holiday", chore: "Chore", appointment: "Appointment", birthday: "Birthday", meal: "Meal", trip: "Trip", movie: "Movie" };
 
 function buildIcs({ events, members, covers = [], memberId, memberName, scope = "mine", now = new Date(), tz = TZ }) {
   const name = (id) => (members.find((m) => m.id === id) || { name: id }).name;

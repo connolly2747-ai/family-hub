@@ -10,5 +10,6 @@ export const CATEGORIES = {
   birthday:    { label: "Birthday / anniversary", color: "#c0508a", rsvp: false, replies: true, rec: "yearly", range: false, icon: "🎂" },
   meal:        { label: "Meal",            color: "#6a9a3b", rsvp: true,  replies: true,  rec: "none",   range: false, icon: "🍽️" },
   trip:        { label: "Family trip",     color: "#2f6f5e", rsvp: true,  replies: true,  rec: "none",   range: true,  icon: "🧳" },
+  movie:       { label: "Movie",           color: "#a21caf", rsvp: true,  replies: true,  rec: "none",   range: false, icon: "🎬" },
 };
 export const catOf = (k) => CATEGORIES[k] || CATEGORIES.general;

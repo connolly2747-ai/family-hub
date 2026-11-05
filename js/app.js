@@ -9,7 +9,7 @@ const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { r
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 function toast(msg, action) { const t = document.getElementById("toast"); t.innerHTML = esc(msg) + (action ? ` <button class="sm" data-a="${action.a}" style="margin-left:8px">${esc(action.label)}</button>` : ""); t.classList.add("show"); t.style.pointerEvents = action ? "auto" : "none"; clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), action ? 7000 : 2600); }
 
-let api, data = { members: [], events: [], rsvps: [], replies: [], done: [], items: [], polls: [], votes: [], tokens: [], covers: [], tickets: [], ticketVotes: [], tasks: [], taskAssignees: [], cats: [], catFeedings: [], notifications: [] };
+let api, data = { members: [], events: [], rsvps: [], replies: [], done: [], items: [], polls: [], votes: [], tokens: [], covers: [], tickets: [], ticketVotes: [], tasks: [], taskAssignees: [], cats: [], catFeedings: [], notifications: [], prefs: [] };
 const S = {
   authed: false, loaded: false, filtersOpen: false, list: "Groceries", view: "home", cal: "month", wishKind: "wish", tasksTab: "mine", push: "unknown", seenN: null, cursor: startOfDay(new Date()), sel: startOfDay(new Date()),
   me: lsGet("fh.me", ""), person: "", cats: new Set(), modal: null, loginErr: "",
@@ -59,7 +59,7 @@ function filtersHtml() {
 }
 
 function bottomNav() {
-  const v = S.view, more = ["polls", "wishes", "cats", "inbox"].includes(v);
+  const v = S.view, more = ["polls", "wishes", "cats", "inbox", "settings"].includes(v);
   const b = (id, ic, label, on) => `<button data-a="nav" data-v="${id}" class="${on ? "on" : ""}" ${on ? 'aria-current="page"' : ""}><span class="ic">${ic}</span><span>${label}</span></button>`;
   return `<nav class="bottomnav" aria-label="Main">${b("home", "🏠", "Home", v === "home")}${b("calendar", "📅", "Calendar", v === "calendar")}
     <button class="addbtn" data-a="new" aria-label="Add event"><span class="ic">＋</span><span>Add</span></button>
@@ -73,13 +73,13 @@ function render() {
   const m = member(S.me), n = filterCount(), unread = myUnread();
   const keep = document.getElementById("quickIn"); const qv = keep ? keep.value : "";
   const home = S.view === "home", calv = S.view === "calendar", showQuick = home || calv;
-  const body = home ? agendaView() : calv ? calToggle() + (S.cal === "week" ? weekView() : monthView()) : S.view === "lists" ? listsView() : S.view === "tasks" ? tasksView() : S.view === "polls" ? pollsView() : S.view === "cats" ? catsView() : S.view === "inbox" ? inboxView() : wishesView();
-  const titles = { home: "Family Hub", calendar: "Calendar", lists: "Lists", tasks: "Tasks", polls: "Polls", cats: "Cats", inbox: "Notifications", wishes: "Feedback & wishes" };
+  const body = home ? agendaView() : calv ? calToggle() + (S.cal === "week" ? weekView() : monthView()) : S.view === "lists" ? listsView() : S.view === "tasks" ? tasksView() : S.view === "polls" ? pollsView() : S.view === "cats" ? catsView() : S.view === "inbox" ? inboxView() : S.view === "settings" ? settingsView() : wishesView();
+  const titles = { home: "Family Hub", calendar: "Calendar", lists: "Lists", tasks: "Tasks", polls: "Polls", cats: "Cats", inbox: "Notifications", settings: "Notification settings", wishes: "Feedback & wishes" };
   $app.innerHTML = `
   <div class="wrap">
     <header class="top">
       <div><h1>${titles[S.view] || "Family Hub"}</h1><div class="muted">Hi <b>${esc(m ? m.name : S.me)}</b> · <a href="#" data-a="switch">not you?</a>${api.name === "demo" ? " · <b>demo mode</b>" : ""}</div></div>
-      <button class="bell ${S.view === "inbox" ? "on" : ""}" data-a="nav" data-v="inbox" aria-label="Notifications${unread ? ", " + unread + " unread" : ""}">🔔${unread ? `<span class="bdg">${unread > 9 ? "9+" : unread}</span>` : ""}</button>
+      <button type="button" class="bell ${S.view === "inbox" ? "on" : ""}" data-a="nav" data-v="inbox" aria-label="Notifications${unread ? ", " + unread + " unread" : ""}">🔔${unread ? `<span class="bdg">${unread > 9 ? "9+" : unread}</span>` : ""}</button>
     </header>
     <div class="layout ${calv ? "" : "single"}">
       ${calv ? `<aside class="side ${S.filtersOpen ? "open" : ""}">${filtersHtml()}</aside>` : ""}
@@ -94,8 +94,18 @@ function render() {
   </div>
   ${bottomNav()}`;
   if (keep && qv) { const el = document.getElementById("quickIn"); if (el) el.value = qv; }
-  try { if (navigator.setAppBadge) (unread ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {}); } catch {}
+  markBusyForms();
+  syncBadge(unread);
 }
+/* App-icon badge = my unread notifications. Lock-screen alerts for notifications already read here are cleared too. */
+function syncBadge(unread) {
+  try { if (navigator.setAppBadge) (unread ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {}); } catch {}
+  if (syncBadge.last === unread || !("serviceWorker" in navigator)) return; syncBadge.last = unread;
+  navigator.serviceWorker.ready.then((reg) => reg.getNotifications ? reg.getNotifications() : []).then((list) => {
+    for (const n of list) { const x = data.notifications.find((y) => y.id === n.tag); if (x && x.read_at) n.close(); }
+  }).catch(() => {});
+}
+function clearBadge() { syncBadge.last = undefined; try { if (navigator.clearAppBadge) navigator.clearAppBadge().catch(() => {}); } catch {} }
 const calToggle = () => `<div class="row tabs" style="margin-bottom:10px"><button data-a="calmode" data-v="month" class="${S.cal === "month" ? "on" : ""}">Month</button><button data-a="calmode" data-v="week" class="${S.cal === "week" ? "on" : ""}">Week</button></div>`;
 
 function renderLogin() {
@@ -194,7 +204,7 @@ function parseQuick(text) {
   } else { const nm = t.match(/\s(\d{1,2})\/(\d{1,2})\b/); if (nm) { date = new Date(date.getFullYear(), Number(nm[1]) - 1, Number(nm[2])); t = t.replace(nm[0], " "); } }
   const title = t.replace(/\s+/g, " ").replace(/\b(on|at)\s*$/i, "").trim();
   const low = title.toLowerCase();
-  const category = /work|shift/.test(low) ? "work" : /dinner|lunch|breakfast|brunch|cook/.test(low) ? "meal" : /doctor|dentist|appointment|checkup|vet/.test(low) ? "appointment"
+  const category = /\bmovies?\b|\bcinema\b|\bfilm\b/.test(low) ? "movie" : /work|shift/.test(low) ? "work" : /dinner|lunch|breakfast|brunch|cook/.test(low) ? "meal" : /doctor|dentist|appointment|checkup|vet/.test(low) ? "appointment"
     : /birthday|anniversary/.test(low) ? "birthday" : /trip|vacation|flight/.test(low) ? "trip" : /school|class|exam|semester|college|home from/.test(low) ? "school"
     : /feed|trash|laundry|dishes|chore/.test(low) ? "chore" : "general";
   const c = catOf(category);
@@ -286,7 +296,7 @@ function openSync() {
 }
 function openMenu() {
   const d = showModal(`<div class="row spread"><h2>More</h2><button class="ghost sm" data-a="close">✕</button></div>
-    <div class="stack" style="margin-top:10px"><button data-a="nav" data-v="inbox">🔔 Notifications</button><button data-a="nav" data-v="cats">🐱 Cats</button><button data-a="nav" data-v="polls">📊 Polls</button><button data-a="nav" data-v="wishes">💡 Feedback &amp; wish list</button><button data-a="sync">📅 Sync with Google / Outlook / Apple calendar</button><button data-a="export">💾 Export everything (backup)</button>
+    <div class="stack" style="margin-top:10px"><button data-a="nav" data-v="inbox">🔔 Notifications</button><button data-a="nav" data-v="settings">⚙️ Notification settings</button><button data-a="nav" data-v="cats">🐱 Cats</button><button data-a="nav" data-v="polls">📊 Polls</button><button data-a="nav" data-v="wishes">💡 Feedback &amp; wish list</button><button data-a="sync">📅 Sync with Google / Outlook / Apple calendar</button><button data-a="export">💾 Export everything (backup)</button>
     <button data-a="switch">👤 Switch person</button><button data-a="signout">Sign out</button></div>`);
   d.dataset.kind = "menu";
 }
@@ -478,7 +488,7 @@ function taskCard(t) {
 }
 
 function openTaskForm(t) {
-  S.modal = { type: "task", t: t ? JSON.parse(JSON.stringify(t)) : { title: "", details: "", priority: "medium", due_date: "", assignees: [] }, isNew: !t };
+  S.modal = { type: "task", t: t ? JSON.parse(JSON.stringify(t)) : { id: uuid(), title: "", details: "", priority: "medium", due_date: "", assignees: [] }, isNew: !t };
   const f = S.modal.t;
   const d = showModal(`<form id="taskForm" class="stack"><div class="row spread"><h2>${t ? "Edit" : "New"} task</h2><button type="button" class="ghost sm" data-a="close">✕</button></div>
     <div><label>What needs doing?</label><input id="tf_title" required maxlength="120" value="${esc(f.title)}" placeholder="e.g. Clean the catio"></div>
@@ -486,7 +496,7 @@ function openTaskForm(t) {
     ${t ? "" : `<div><label>Assign to</label><div class="chips" id="tf_who">${data.members.map((m) => `<span class="chip" data-a="tfwho" data-id="${m.id}"><span class="dot" style="background:${m.color}"></span>${esc(m.name)}</span>`).join("")}</div></div>`}
     <div><label>Priority</label><div class="chips" id="tf_prio">${["low", "medium", "high"].map((k) => `<span class="chip ${f.priority === k ? "on" : ""}" data-a="tfprio" data-id="${k}">${PRIO[k].label}</span>`).join("")}</div></div>
     <div><label>Deadline (optional)</label><input type="date" id="tf_due" value="${esc(f.due_date || "")}"></div>
-    <div class="err" id="tf_err"></div><div class="row" style="justify-content:flex-end"><button type="button" data-a="close">Cancel</button><button class="primary" type="submit">${t ? "Save" : "Assign"}</button></div></form>`);
+    <div class="err" id="tf_err" role="alert"></div><div class="row" style="justify-content:flex-end"><button type="button" data-a="close">Cancel</button><button class="primary" type="submit">${t ? "Save" : "Add task"}</button></div></form>`);
   d.dataset.kind = "taskform";
 }
 
@@ -552,7 +562,7 @@ function openCatForm(c) {
 /* ---------------- notifications ---------------- */
 const myNotifs = () => data.notifications.filter((n) => n.member_id === S.me).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 const myUnread = () => data.notifications.filter((n) => n.member_id === S.me && !n.read_at).length;
-const NOTIF_ICON = { task: "✅", task_seen: "👀", task_done: "🎉", extension: "⏳", cover: "🐱", grocery: "🛒", ticket: "💡" };
+const NOTIF_ICON = { task: "✅", task_seen: "👀", task_done: "🎉", extension: "⏳", cover: "🐱", grocery: "🛒", ticket: "💡", event: "📅", reminder: "⏰" };
 const timeAgo = (iso) => { const m = Math.round((Date.now() - new Date(iso)) / 6e4); return m < 1 ? "just now" : m < 60 ? m + "m ago" : m < 1440 ? Math.round(m / 60) + "h ago" : new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" }); };
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent);
 const isStandalone = () => (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
@@ -585,23 +595,23 @@ async function syncPushOwner() { // if this device is subscribed and a different
 function goTarget(t) {
   closeModal();
   if (t === "tasks_assigned") { S.view = "tasks"; S.tasksTab = "assigned"; } else if (t === "tasks") { S.view = "tasks"; S.tasksTab = "mine"; }
-  else if (["lists", "calendar", "cats", "wishes", "polls", "inbox", "home"].includes(t)) S.view = t; else S.view = "home";
+  else if (["lists", "calendar", "cats", "wishes", "polls", "inbox", "settings", "home"].includes(t)) S.view = t; else S.view = "home";
   window.scrollTo(0, 0); render();
 }
 function inboxView() {
   const list = myNotifs(), unread = list.filter((n) => !n.read_at).length;
   const pushCard = {
     on: `<div class="row spread"><div>✅ <b>Lock-screen alerts are on</b> for this device.</div><button class="sm" data-a="pushoff">Turn off</button></div>`,
-    off: `<div class="row spread"><div>🔔 <b>Get alerts on your lock screen</b><div class="muted">New tasks, deadline requests, cover requests and groceries assigned to you.</div></div><button class="sm primary" data-a="pushon">Turn on</button></div>`,
+    off: `<div class="row spread"><div>🔔 <b>Get alerts on your lock screen</b><div class="muted">New tasks, calendar changes, day-before reminders, cover requests and groceries assigned to you.</div></div><button class="sm primary" data-a="pushon">Turn on</button></div>`,
     denied: `<div>🔕 <b>Alerts are blocked.</b><div class="muted">Open your phone's Settings → Family Hub (or Safari → this site) → Notifications → Allow, then come back.</div></div>`,
     "needs-install": `<div>📲 <b>To get lock-screen alerts on iPhone,</b> add Family Hub to your Home Screen first (Share → Add to Home Screen), then open it from the icon and turn alerts on here.</div>`,
     unsupported: `<div class="muted">This browser doesn't support lock-screen alerts. You'll still see everything here.</div>`,
     unknown: `<div class="muted">Checking alert settings…</div>`,
   }[S.push] || "";
-  return `<div class="card">${pushCard}</div>
+  return `<div class="card">${pushCard}<div class="row" style="margin-top:10px"><button class="sm" data-a="nav" data-v="settings">⚙️ Choose what you get notified about</button></div></div>
     <div class="row spread" style="margin:12px 0 4px"><h3>${unread ? `${unread} unread` : "All caught up"}</h3>${unread ? `<button class="sm" data-a="markall">Mark all read</button>` : ""}</div>
     ${list.length ? list.slice(0, 60).map((n) => `<div class="card notif ${n.read_at ? "" : "unread"}" style="margin-top:8px" data-a="notif" data-id="${n.id}" data-target="${esc(n.target)}"><div class="row" style="flex-wrap:nowrap;align-items:flex-start"><span style="font-size:1.4rem">${NOTIF_ICON[n.kind] || "🔔"}</span>
-      <div class="t" style="flex:1"><b>${esc(n.title)}</b>${n.body ? `<div>${esc(n.body)}</div>` : ""}<div class="muted">${timeAgo(n.created_at)}</div></div>${n.read_at ? "" : `<span class="udot"></span>`}</div></div>`).join("") : `<div class="card" style="margin-top:8px"><p class="muted">Nothing yet. You'll see new tasks, deadline requests, cover requests and grocery assignments here.</p></div>`}`;
+      <div class="t" style="flex:1"><b>${esc(n.title)}</b>${n.body ? `<div>${esc(n.body)}</div>` : ""}<div class="muted">${timeAgo(n.created_at)}</div></div>${n.read_at ? "" : `<span class="udot"></span>`}</div></div>`).join("") : `<div class="card" style="margin-top:8px"><p class="muted">Nothing yet. You'll see new tasks, calendar changes, reminders, cover requests and grocery assignments here.</p></div>`}`;
 }
 
 /* ---------------- RSVP / chore helpers ---------------- */
@@ -682,8 +692,9 @@ function openForm(ev, defaults = {}) {
     <div class="grid2"><div><label>Start date</label><input type="date" id="f_sd" required value="${dayKey(d0)}"></div><div id="f_stbox" ${f.all_day ? "hidden" : ""}><label>Start time</label><input type="time" id="f_st" value="${f.start_at ? t(d0) : "18:00"}"></div>
       <div><label>End date (optional)</label><input type="date" id="f_ed" value="${d1 ? dayKey(d1) : ""}"></div><div id="f_etbox" ${f.all_day ? "hidden" : ""}><label>End time</label><input type="time" id="f_et" value="${d1 ? t(d1) : ""}"></div></div>
     <div><label>Where</label><input id="f_place" maxlength="120" value="${esc(f.place || "")}"></div>
-    <details class="more-opts" ${f.notes || (!S.modal.isNew) ? "open" : ""}><summary class="muted" style="cursor:pointer">More options (notes, RSVPs, replies)</summary><div class="stack" style="margin-top:10px">
+    <details class="more-opts" ${f.notes || f.reminder_message || (!S.modal.isNew) ? "open" : ""}><summary class="muted" style="cursor:pointer">More options (notes, reminder, RSVPs, replies)</summary><div class="stack" style="margin-top:10px">
     <div><label>Notes</label><textarea id="f_notes" rows="3" maxlength="1000">${esc(f.notes || "")}</textarea></div>
+    <div><label>Custom reminder message (optional)</label><input id="f_rem" maxlength="200" value="${esc(f.reminder_message || "")}" placeholder="Sent the evening before. Leave blank for the usual reminder."></div>
     <label style="display:flex;gap:6px;align-items:center;color:var(--ink);font-size:.95rem"><input type="checkbox" id="f_cats" style="width:auto" ${f.section === "cats" ? "checked" : ""}> 🐱 Cat care (show on the Cats page, not the main calendar)</label>
     <div class="row"><label style="display:flex;gap:6px;align-items:center;color:var(--ink);font-size:.95rem"><input type="checkbox" id="f_rsvp" style="width:auto" ${f.rsvp_enabled ? "checked" : ""}> Ask for RSVPs</label>
       <label style="display:flex;gap:6px;align-items:center;color:var(--ink);font-size:.95rem"><input type="checkbox" id="f_rep" style="width:auto" ${f.replies_enabled ? "checked" : ""}> Allow replies</label></div></div></details>
@@ -724,7 +735,8 @@ document.addEventListener("click", async (ev) => {
     case "tasknew": openTaskForm(null); break;
     case "taskedit": openTaskForm(data.tasks.find((x) => x.id === el.dataset.id)); break;
     case "taskdel": if (confirm("Delete this task for everyone?")) guarded(async () => { await api.deleteTask(el.dataset.id); await refresh(); toast("Task deleted"); }); break;
-    case "tfwho": { const f = S.modal.t, id = el.dataset.id; f.assignees = f.assignees.includes(id) ? f.assignees.filter((x) => x !== id) : [...f.assignees, id]; el.classList.toggle("on"); break; }
+    case "tfwho": { const f = S.modal.t, id = el.dataset.id; f.assignees = f.assignees.includes(id) ? f.assignees.filter((x) => x !== id) : [...f.assignees, id]; el.classList.toggle("on");
+      if (f.assignees.length) { document.getElementById("tf_who").classList.remove("need"); const er = document.getElementById("tf_err"); er.textContent = ""; er.className = "err"; } break; }
     case "tfprio": S.modal.t.priority = el.dataset.id; document.querySelectorAll("#tf_prio .chip").forEach((c) => c.classList.toggle("on", c.dataset.id === el.dataset.id)); break;
     case "taskseen": case "taskdone": case "taskreopen": { const st = a === "taskseen" ? "seen" : a === "taskdone" ? "done" : "seen";
       guarded(async () => { await api.setTaskStatus(el.dataset.id, el.dataset.m, st); await refresh(); toast(a === "taskseen" ? "Got it. They'll see you've seen it." : a === "taskdone" ? "Marked done. Nice!" : "Reopened"); }); break; }
@@ -758,12 +770,12 @@ document.addEventListener("click", async (ev) => {
     case "day": S.sel = parseKey(el.dataset.k); render(); if (innerWidth < 700) document.getElementById("daylist")?.scrollIntoView({ behavior: "smooth", block: "start" }); break;
     case "filters": S.filtersOpen = !S.filtersOpen; render(); break;
     case "clearfilters": S.person = ""; S.cats.clear(); render(); break;
-    case "undo": if (S.lastDeleted) { const e = S.lastDeleted; S.lastDeleted = null; guarded(async () => { await api.saveEvent(e); await refresh(); toast("Restored (RSVPs and replies weren't kept)"); }); } break;
+    case "undo": if (S.lastDeleted) { const e = S.lastDeleted; S.lastDeleted = null; guarded(async () => { await api.saveEvent({ ...e, updated_by: S.me }); await refresh(); toast("Restored (RSVPs and replies weren't kept)"); }); } break;
     case "person": S.person = el.dataset.id; render(); break;
     case "cat": S.cats.has(el.dataset.id) ? S.cats.delete(el.dataset.id) : S.cats.add(el.dataset.id); render(); break;
         case "iam": S.me = el.dataset.id; lsSet("fh.me", S.me); S.seenN = new Set(data.notifications.filter((n) => n.member_id === S.me && !n.read_at).map((n) => n.id)); syncPushOwner(); render(); break;
     case "switch": closeModal(); S.me = ""; lsSet("fh.me", ""); render(); break;
-    case "signout": closeModal(); await api.signOut(); S.authed = false; render(); break;
+    case "signout": closeModal(); clearBadge(); await api.signOut(); S.authed = false; render(); break;
     case "menu": openMenu(); break;
     case "sync": openSync(); break;
     case "export": exportData(); break;
@@ -787,7 +799,7 @@ document.addEventListener("click", async (ev) => {
     case "delreply": guarded(async () => { await api.deleteReply(el.dataset.id); await refresh(); }); break;
     case "edit": { const e = data.events.find((x) => x.id === S.modal.id); closeModal(); openForm(e); break; }
     case "delete": { const e = data.events.find((x) => x.id === S.modal.id);
-      guarded(async () => { S.lastDeleted = JSON.parse(JSON.stringify(e)); await api.deleteEvent(e.id); closeModal(); await refresh(); toast("Event deleted", { a: "undo", label: "Undo" }); }); break; }
+      guarded(async () => { S.lastDeleted = JSON.parse(JSON.stringify(e)); await api.deleteEvent(e.id, S.me); closeModal(); await refresh(); toast("Event deleted", { a: "undo", label: "Undo" }); }); break; }
     case "fwho": { const f = S.modal.e; const id = el.dataset.id; f.member_ids = f.member_ids.includes(id) ? f.member_ids.filter((x) => x !== id) : [...f.member_ids, id]; el.classList.toggle("on"); break; }
     case "frot": { const f = S.modal.e; const id = el.dataset.id; f.rotation = f.rotation.includes(id) ? f.rotation.filter((x) => x !== id) : [...f.rotation, id];
       document.querySelectorAll("#f_rot .chip").forEach((c) => { const i = f.rotation.indexOf(c.dataset.id); c.classList.toggle("on", i >= 0); c.textContent = (i >= 0 ? i + 1 + ". " : "") + mname(c.dataset.id); }); break; }
@@ -809,70 +821,139 @@ document.addEventListener("change", (ev) => {
   if (ev.target.id === "f_all") { const on = ev.target.checked; document.getElementById("f_stbox").hidden = on; document.getElementById("f_etbox").hidden = on; }
 });
 
+/* ---------------- submitting (one save per click) ----------------
+   The submit button is disabled on the first click and shows "Adding…"; further clicks and Enter presses are ignored
+   until the save finishes. Modal forms then show "✓ Task added" and close themselves; inline forms show a toast.
+   On failure the button comes back so the person can try again. */
+const inflight = new Set();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function markBusyForms() { for (const id of inflight) document.querySelectorAll(`#${id} button[type=submit]`).forEach((b) => { b.disabled = true; }); }
+async function submitOnce(form, fn, { busy = "Saving…", done = "Saved", close = false } = {}) {
+  const id = form.id; if (!id || inflight.has(id)) return false;
+  inflight.add(id);
+  const btn = form.querySelector("button[type=submit]"), label = btn ? btn.innerHTML : "", dlg = form.closest("dialog");
+  if (btn) { btn.disabled = true; btn.classList.add("busy"); btn.textContent = busy; }
+  try {
+    await fn();
+    if (close && dlg) {
+      if (btn) { btn.classList.remove("busy"); btn.classList.add("ok"); btn.textContent = "✓ " + done; }
+      toast("✓ " + done); await sleep(650);
+      if (dlg.open && S.dlg === dlg) closeModal();
+    } else toast("✓ " + done);
+    return true;
+  } catch (err) {
+    console.error(err); toast("Couldn't save: " + (err.message || err));
+    return false;
+  } finally {
+    inflight.delete(id);
+    document.querySelectorAll(`#${id} button[type=submit]`).forEach((b) => { if (b === btn && close && dlg && dlg.open && b.classList.contains("ok")) return; b.disabled = false; b.classList.remove("busy", "ok"); if (b === btn) b.innerHTML = label; });
+  }
+}
+
+/* ---------------- notification settings ---------------- */
+const PREF_KINDS = [["tasks", "✅ Tasks", "New tasks for you, and when people see or finish yours"], ["extensions", "⏳ Deadline requests", "Requests for more time, and the answers"],
+  ["events", "📅 Calendar changes", "Events added for you, time changes and cancellations"], ["reminders", "⏰ Day-before reminders", "The evening before each event you're part of"],
+  ["groceries", "🛒 Groceries", "Items someone asks you to pick up"], ["covers", "🐱 Chore covers", "When someone needs cover, and who's covering for you"]];
+const myPrefs = () => ({ member_id: S.me, tasks: true, extensions: true, events: true, reminders: true, groceries: true, covers: true, muted_categories: [], quiet_start: null, quiet_end: null, ...(data.prefs.find((p) => p.member_id === S.me) || {}) });
+const hhmm = (t) => (t ? String(t).slice(0, 5) : "");
+function settingsView() {
+  const p = myPrefs(), quiet = !!p.quiet_start;
+  return `<form id="prefsForm" class="stack">
+    <div class="card"><h3>Notify me about</h3><div class="muted" style="margin:2px 0 6px">Settings for <b>${esc(mname(S.me))}</b>. Turned-off kinds don't show up in your inbox or on your lock screen.</div>
+      ${PREF_KINDS.map(([k, l, d]) => `<label class="prefrow"><input type="checkbox" name="${k}" ${p[k] ? "checked" : ""}><span><b>${l}</b><div class="muted">${d}</div></span></label>`).join("")}</div>
+    <div class="card"><h3>Calendar types</h3><div class="muted">Uncheck a type to skip its calendar changes and reminders.</div>
+      <div class="catgrid">${Object.entries(CATEGORIES).map(([k, c]) => `<label><input type="checkbox" name="cat" value="${k}" ${p.muted_categories.includes(k) ? "" : "checked"}><span class="dot" style="display:inline-block;width:.6em;height:.6em;border-radius:50%;background:${c.color}"></span>${c.icon} ${esc(c.label)}</label>`).join("")}</div></div>
+    <div class="card"><h3>Quiet hours</h3><div class="muted">No lock-screen alerts during these hours (Eastern time). Notifications still wait in your inbox.</div>
+      <label class="prefrow" style="border:0"><input type="checkbox" id="q_on" ${quiet ? "checked" : ""}><span><b>Use quiet hours</b></span></label>
+      <div class="grid2" id="q_box" ${quiet ? "" : "hidden"}><div><label>From</label><input type="time" id="q_from" value="${hhmm(p.quiet_start) || "22:00"}"></div><div><label>Until</label><input type="time" id="q_to" value="${hhmm(p.quiet_end) || "07:00"}"></div></div></div>
+    <div class="err" id="pf_err"></div>
+    <div class="row" style="justify-content:flex-end"><button type="button" data-a="nav" data-v="inbox">Back</button><button class="primary" type="submit">Save settings</button></div></form>`;
+}
+
 document.addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  if (ev.target.id === "itemForm") {
-    const inp = document.getElementById("itemIn"), noteEl = document.getElementById("noteIn"), t = inp.value.trim(), note = noteEl ? noteEl.value.trim() : ""; if (!t) return;
+  const form = ev.target;
+  if (form.id === "itemForm") {
+    const inp = document.getElementById("itemIn"), noteEl = document.getElementById("noteIn"), t = inp.value.trim(), note = noteEl ? noteEl.value.trim() : ""; if (!t || inflight.has("itemForm")) return;
     const d = openItem(S.list, t); if (d) { inp.value = ""; if (noteEl) noteEl.value = ""; toast(`${d.text} is already on the list (requested by ${mname(d.added_by)})`); return; }
     const asg = (document.getElementById("asgIn") || {}).value || "", need = (document.getElementById("needIn") || {}).value || "";
-    inp.value = ""; if (noteEl) noteEl.value = ""; const ae = document.getElementById("asgIn"), ne = document.getElementById("needIn"); if (ae) ae.value = ""; if (ne) ne.value = "";
-    guarded(async () => { await api.addItem(S.list, t, S.me, note, asg, need); await refresh(); toast(asg ? `Assigned to ${mname(asg)}` : "Requested. Anyone can grab it."); }); return; }
-  if (ev.target.id === "gassignForm") {
+    submitOnce(form, async () => { await api.addItem(S.list, t, S.me, note, asg, need); await refresh(); }, { busy: "Adding…", done: asg ? `Added · assigned to ${mname(asg)}` : S.list === "Groceries" ? "Requested. Anyone can grab it." : "Added" });
+    return; }
+  if (form.id === "gassignForm") {
     const who = document.getElementById("ga_who").value, due = document.getElementById("ga_due").value || null, id = S.modal.id;
-    guarded(async () => { await api.updateItem(id, { assigned_to: who || null, assigned_by: who ? S.me : null, needed_by: due }); closeModal(); await refresh(); toast("Updated"); }); return; }
-  if (ev.target.id === "taskForm") {
-    const f = S.modal.t, title = document.getElementById("tf_title").value.trim(), details = document.getElementById("tf_details").value.trim(), due = document.getElementById("tf_due").value || null, err = document.getElementById("tf_err");
-    if (!title) return; if (S.modal.isNew && !f.assignees.length) { err.textContent = "Pick at least one person."; return; }
-    guarded(async () => { if (S.modal.isNew) await api.createTask({ title, details: details || null, assigned_by: S.me, priority: f.priority, due_date: due }, f.assignees);
+    submitOnce(form, async () => { await api.updateItem(id, { assigned_to: who || null, assigned_by: who ? S.me : null, needed_by: due }); await refresh(); }, { done: "Updated", close: true }); return; }
+  if (form.id === "taskForm") {
+    const f = S.modal.t, isNew = S.modal.isNew, title = document.getElementById("tf_title").value.trim(), details = document.getElementById("tf_details").value.trim(), due = document.getElementById("tf_due").value || null, err = document.getElementById("tf_err");
+    if (!title) return;
+    if (isNew && !f.assignees.length) { // warn before saving: a task with nobody on it would be invisible to everyone
+      err.className = "err warnbox"; err.textContent = "⚠ Nobody is assigned yet. Tap at least one name under “Assign to”, then add the task.";
+      const w = document.getElementById("tf_who"); w.classList.add("need"); w.scrollIntoView({ block: "center", behavior: "smooth" }); return; }
+    submitOnce(form, async () => {
+      if (isNew) await api.createTask({ id: f.id, title, details: details || null, assigned_by: S.me, priority: f.priority, due_date: due }, f.assignees);
       else await api.updateTask(f.id, { title, details: details || null, priority: f.priority, due_date: due });
-      closeModal(); await refresh(); toast(S.modal === null ? "Saved" : "Saved"); }); return; }
-  if (ev.target.id === "catForm") {
+      await refresh();
+    }, { busy: isNew ? "Adding…" : "Saving…", done: isNew ? "Task added" : "Task saved", close: true }); return; }
+  if (form.id === "catForm") {
     const id = S.modal.id, name = document.getElementById("ct_name").value.trim(), kind = document.getElementById("ct_kind").value, notes = document.getElementById("ct_notes").value.trim() || null; if (!name) return;
-    guarded(async () => { await api.saveCat({ ...(id ? { id } : {}), name, kind, notes }); closeModal(); await refresh(); toast("Saved"); }); return; }
-  if (ev.target.id === "wishForm") {
+    submitOnce(form, async () => { await api.saveCat({ ...(id ? { id } : {}), name, kind, notes }); await refresh(); }, { done: id ? "Saved" : "Cat added", close: true }); return; }
+  if (form.id === "wishForm") {
     const title = document.getElementById("wt").value.trim(), details = document.getElementById("wd").value.trim(); if (!title) return;
     const context = `${S.view} · ${innerWidth}x${innerHeight} · ${navigator.userAgent}`.slice(0, 290);
-    guarded(async () => { await api.addTicket({ kind: S.wishKind, title, details: details || null, context, created_by: S.me }); await refresh(); toast("Thanks! It's on the list."); }); return; }
-  if (ev.target.id === "newListForm") { const n = document.getElementById("newListIn").value.trim(); if (!n) return; S.list = n; document.getElementById("newListIn").value = ""; render(); document.getElementById("itemIn")?.focus(); return; }
-  if (ev.target.id === "pollForm") {
+    submitOnce(form, async () => { await api.addTicket({ kind: S.wishKind, title, details: details || null, context, created_by: S.me }); await refresh(); }, { busy: "Sending…", done: "Thanks! It's on the list." }); return; }
+  if (form.id === "newListForm") { const n = document.getElementById("newListIn").value.trim(); if (!n) return; S.list = n; document.getElementById("newListIn").value = ""; render(); document.getElementById("itemIn")?.focus(); return; }
+  if (form.id === "pollForm") {
     const q = document.getElementById("pq").value.trim(), opts = document.getElementById("po").value.split("\n").map((x) => x.trim()).filter(Boolean).slice(0, 10);
     if (opts.length < 2) { toast("Add at least two options, one per line"); return; }
-    guarded(async () => { await api.createPoll(q, opts, S.me); await refresh(); toast("Poll created"); }); return;
-  }
-  if (ev.target.id === "quick") {
+    submitOnce(form, async () => { await api.createPoll(q, opts, S.me); await refresh(); }, { busy: "Creating…", done: "Poll created" }); return; }
+  if (form.id === "prefsForm") {
+    const g = (n) => form.querySelector(`[name=${n}]`).checked, on = document.getElementById("q_on").checked, qf = document.getElementById("q_from").value, qt = document.getElementById("q_to").value;
+    if (on && (!qf || !qt || qf === qt)) { document.getElementById("pf_err").textContent = "Pick a start and end time for quiet hours (they can't be the same)."; return; }
+    const row = { member_id: S.me, tasks: g("tasks"), extensions: g("extensions"), events: g("events"), reminders: g("reminders"), groceries: g("groceries"), covers: g("covers"),
+      muted_categories: [...form.querySelectorAll("[name=cat]")].filter((x) => !x.checked).map((x) => x.value), quiet_start: on ? qf : null, quiet_end: on ? qt : null };
+    submitOnce(form, async () => { await api.savePrefs(row); await refresh(); }, { done: "Settings saved" }); return; }
+  if (form.id === "quick") {
     const txt = document.getElementById("quickIn").value.trim(); if (!txt) return;
     document.getElementById("quickIn").value = ""; const q = parseQuick(txt); S.sel = new Date(q.start_at); openForm(null, q); return;
   }
-  if (ev.target.id === "loginForm") {
+  if (form.id === "loginForm") {
+    if (inflight.has("loginForm")) return; inflight.add("loginForm"); const btn = form.querySelector("button[type=submit]"); if (btn) btn.disabled = true;
     const code = document.getElementById("code").value;
-    try { await api.signIn(code); S.authed = true; S.loginErr = ""; await boot2(); } catch (err) { S.loginErr = err.message; renderLogin(); }
-  } else if (ev.target.id === "replyForm") {
-    const inp = document.getElementById("replyBody"), body = inp.value.trim(); if (!body) return; inp.value = "";
-    guarded(async () => { await api.addReply(S.modal.id, S.me, body); await refresh(); });
-  } else if (ev.target.id === "evForm") {
-    const f = S.modal.e, g = (id) => document.getElementById(id), all = g("f_all").checked;
+    try { await api.signIn(code); S.authed = true; S.loginErr = ""; await boot2(); } catch (err) { S.loginErr = err.message; renderLogin(); } finally { inflight.delete("loginForm"); }
+  } else if (form.id === "replyForm") {
+    const inp = document.getElementById("replyBody"), body = inp.value.trim(); if (!body) return;
+    submitOnce(form, async () => { await api.addReply(S.modal.id, S.me, body); inp.value = ""; await refresh(); }, { busy: "Sending…", done: "Reply sent" });
+  } else if (form.id === "evForm") {
+    const f = S.modal.e, isNew = S.modal.isNew, g = (id) => document.getElementById(id), all = g("f_all").checked;
     const mk = (d, t) => (d ? new Date(`${d}T${all ? "00:00" : t || "00:00"}`) : null);
     const s = mk(g("f_sd").value, g("f_st").value); let en = mk(g("f_ed").value, g("f_et").value);
     if (!all && !en && g("f_et").value) en = mk(g("f_sd").value, g("f_et").value);
     if (en && en < s) { g("f_err").textContent = "End is before the start."; return; }
-    if (f.category === "chore" && !f.rotation.length && !f.member_ids.length) { /* family-wide chore is fine */ }
     const row = { id: f.id, title: g("f_title").value.trim(), category: g("f_cat").value, start_at: s.toISOString(), end_at: en ? en.toISOString() : null, all_day: all,
       place: g("f_place").value.trim() || null, notes: g("f_notes").value.trim() || null, member_ids: f.member_ids, rotation: g("f_cat").value === "chore" ? f.rotation : [],
-      recurrence: g("f_rec").value, rsvp_enabled: g("f_rsvp").checked, replies_enabled: g("f_rep").checked, added_by: S.modal.isNew ? S.me : f.added_by, section: g("f_cats").checked ? "cats" : null };
-    guarded(async () => { await api.saveEvent(row); closeModal(); S.sel = startOfDay(s); S.cursor = startOfDay(s); await refresh(); toast("Saved"); });
+      recurrence: g("f_rec").value, rsvp_enabled: g("f_rsvp").checked, replies_enabled: g("f_rep").checked, added_by: isNew ? S.me : f.added_by, updated_by: S.me,
+      reminder_message: g("f_rem").value.trim() || null, section: g("f_cats").checked ? "cats" : null };
+    submitOnce(form, async () => { await api.saveEvent(row); S.sel = startOfDay(s); S.cursor = startOfDay(s); await refresh(); }, { busy: isNew ? "Adding…" : "Saving…", done: isNew ? "Event added" : "Event saved", close: true });
   }
 });
+document.addEventListener("change", (ev) => { if (ev.target.id === "q_on") { const b = document.getElementById("q_box"); if (b) b.hidden = !ev.target.checked; } });
 
 /* ---------------- boot ---------------- */
+function markOpened(id) { // tapping a lock-screen alert counts as reading it, so the badge goes down
+  const n = id && data.notifications.find((x) => x.id === id);
+  if (n && !n.read_at) { n.read_at = new Date().toISOString(); api.markRead([n.id]).catch(() => {}); }
+}
 let unsub = null;
 async function boot2() {
   data = await api.load(); S.seenN = new Set(data.notifications.filter((n) => n.member_id === S.me && !n.read_at).map((n) => n.id));
   if (S.me && !member(S.me)) S.me = "";
   if (unsub) unsub();
   unsub = api.subscribe(() => refresh().catch(console.error));
-  const go = new URLSearchParams(location.search).get("go"); if (go) { history.replaceState(null, "", location.pathname); goTarget(go); } else render();
+  const qs = new URLSearchParams(location.search), go = qs.get("go"), nid = qs.get("n");
+  if (go) { history.replaceState(null, "", location.pathname); markOpened(nid); goTarget(go); } else render();
   updatePushState();
-  if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.type === "go") goTarget(e.data.target); });
+  if ("serviceWorker" in navigator && !boot2.wired) navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.type === "go") { markOpened(e.data.id); goTarget(e.data.target); } });
+  if (!boot2.wired) document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.authed) refresh().catch(console.error); });
+  boot2.wired = true;
 }
 (async function boot() {
   render();

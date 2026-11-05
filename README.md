@@ -22,3 +22,12 @@ A private, shared family calendar: work schedules, college/travel dates, out-of-
 
 ## Roadmap
 Personal iCal subscription feeds (Google/Outlook/Apple), importing external calendars, email reminders, individual accounts.
+
+## Notifications & reminders
+- Database changes live in `supabase/migrations/` (apply in filename order).
+- Calendar notifications (add / time change / cancel) come from the `event_notify` trigger; each person's
+  settings (More → Notification settings) are stored in `notification_prefs` and enforced inside `public.notify`.
+- Day-before reminders: `public.send_due_reminders()` sends tomorrow's reminders between 5pm and 10pm Eastern and never
+  repeats one. It runs daily from the Vercel cron `/api/reminders`. For hourly runs (catches events added later in
+  the evening), enable pg_cron in Supabase (Database → Extensions) and run:
+  `select cron.schedule('family-hub-event-reminders', '5 * * * *', 'select public.send_due_reminders()');`

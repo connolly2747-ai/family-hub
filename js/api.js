@@ -18,7 +18,7 @@ async function supabaseBackend() {
     },
     async signOut() { await sb.auth.signOut(); },
     async load() {
-      const [members, events, rsvps, replies, done, items, polls, votes, tokens, covers, tickets, ticketVotes, tasks, taskAssignees, cats, notifications, catFeedings] = await Promise.all([
+      const [members, events, rsvps, replies, done, items, polls, votes, tokens, covers, tickets, ticketVotes, tasks, taskAssignees, cats, notifications, catFeedings, prefs] = await Promise.all([
         sb.from("members").select("*").order("sort"),
         sb.from("events").select("*").order("start_at"),
         sb.from("rsvps").select("*"),
@@ -34,23 +34,24 @@ async function supabaseBackend() {
         sb.from("tasks").select("*").order("created_at", { ascending: false }),
         sb.from("task_assignees").select("*"),
         sb.from("cats").select("*").order("sort"),
-        sb.from("notifications").select("*").gte("created_at", new Date(Date.now() - 60 * 864e5).toISOString()).order("created_at", { ascending: false }),
+        sb.from("notifications").select("*").or(`created_at.gte."${new Date(Date.now() - 60 * 864e5).toISOString()}",read_at.is.null`).order("created_at", { ascending: false }),
         sb.from("cat_feedings").select("*").gte("fed_on", new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10)),
+        sb.from("notification_prefs").select("*"),
       ]);
       return { members: must(members), events: must(events), rsvps: must(rsvps), replies: must(replies), done: must(done),
-        items: must(items), polls: must(polls), votes: must(votes), tokens: must(tokens), covers: must(covers), tickets: must(tickets), ticketVotes: must(ticketVotes), tasks: must(tasks), taskAssignees: must(taskAssignees), cats: must(cats), catFeedings: must(catFeedings), notifications: must(notifications) };
+        items: must(items), polls: must(polls), votes: must(votes), tokens: must(tokens), covers: must(covers), tickets: must(tickets), ticketVotes: must(ticketVotes), tasks: must(tasks), taskAssignees: must(taskAssignees), cats: must(cats), catFeedings: must(catFeedings), notifications: must(notifications), prefs: must(prefs) };
     },
     subscribe(cb) {
       let t;
       const ping = () => { clearTimeout(t); t = setTimeout(cb, 250); };
       const ch = sb.channel("family-hub");
-      for (const table of ["events", "rsvps", "replies", "chore_done", "members", "list_items", "polls", "votes", "chore_cover", "tickets", "ticket_votes", "tasks", "task_assignees", "cats", "cat_feedings", "notifications"])
+      for (const table of ["events", "rsvps", "replies", "chore_done", "members", "list_items", "polls", "votes", "chore_cover", "tickets", "ticket_votes", "tasks", "task_assignees", "cats", "cat_feedings", "notifications", "notification_prefs"])
         ch.on("postgres_changes", { event: "*", schema: "public", table }, ping);
       ch.subscribe();
       return () => sb.removeChannel(ch);
     },
     async saveEvent(ev) { must(await sb.from("events").upsert(ev)); },
-    async deleteEvent(id) { must(await sb.from("events").delete().eq("id", id)); },
+    async deleteEvent(id, by) { must(await sb.rpc("delete_event", { p_id: id, p_by: by || null })); }, // records who cancelled it
     async setRsvp(event_id, member_id, on_date, status) {
       if (!status) must(await sb.from("rsvps").delete().match({ event_id, member_id, on_date }));
       else must(await sb.from("rsvps").upsert({ event_id, member_id, on_date, status }));
@@ -81,7 +82,10 @@ async function supabaseBackend() {
     async unlogFeeding(id) { must(await sb.from("cat_feedings").delete().eq("id", id)); },
     async saveCat(c) { must(await sb.from("cats").upsert(c)); },
     async deleteCat(id) { must(await sb.from("cats").delete().eq("id", id)); },
-    async createTask(task, assignees) { const row = must(await sb.from("tasks").insert(task).select().single()); must(await sb.from("task_assignees").insert(assignees.map((member_id) => ({ task_id: row.id, member_id })))); },
+    async createTask(task, assignees) { // one transaction: the task and its assignees are saved together or not at all
+      must(await sb.rpc("create_task", { p_id: task.id || uuid(), p_title: task.title, p_details: task.details || "", p_assigned_by: task.assigned_by, p_priority: task.priority || "medium", p_due_date: task.due_date || null, p_assignees: assignees }));
+    },
+    async savePrefs(p) { must(await sb.from("notification_prefs").upsert({ ...p, updated_at: new Date().toISOString() })); },
     async updateTask(id, fields) { must(await sb.from("tasks").update(fields).eq("id", id)); },
     async deleteTask(id) { must(await sb.from("tasks").delete().eq("id", id)); },
     async setTaskStatus(task_id, member_id, status) { const now = new Date().toISOString(); const f = { status }; if (status === "seen") f.seen_at = now; if (status === "done") { f.done_at = now; } if (status !== "done") f.done_at = null; must(await sb.from("task_assignees").update(f).match({ task_id, member_id })); },
@@ -110,7 +114,7 @@ function demoBackend() {
   let db;
   try { db = JSON.parse(localStorage.getItem(KEY)); } catch { db = null; }
   if (!db) db = {};
-  for (const k of ["events", "rsvps", "replies", "done", "items", "polls", "votes", "tokens", "covers", "tickets", "ticketVotes", "tasks", "taskAssignees", "cats", "catFeedings", "notifications"]) db[k] = db[k] || [];
+  for (const k of ["events", "rsvps", "replies", "done", "items", "polls", "votes", "tokens", "covers", "tickets", "ticketVotes", "tasks", "taskAssignees", "cats", "catFeedings", "notifications", "prefs"]) db[k] = db[k] || [];
   if (!db.cats.length) db.cats = [["Sonoma","outdoor"],["Casper","outdoor"],["Meatloaf","indoor"],["Muffin","indoor"],["Felix","indoor"],["Tabitha","indoor"],["Totoro","indoor"],["Maverick","indoor"],["Cleo","indoor"]].map(([name, kind], i) => ({ id: uuid(), name, kind, notes: null, sort: i + 1 }));
   if (!db.tokens.length) db.tokens = members.map((m) => ({ member_id: m.id, token: newToken() }));
   const listeners = new Set();
@@ -144,7 +148,8 @@ function demoBackend() {
     async unlogFeeding(id) { db.catFeedings = db.catFeedings.filter((x) => x.id !== id); save(); },
     async saveCat(c) { const i = db.cats.findIndex((x) => x.id === c.id); if (i >= 0) db.cats[i] = { ...db.cats[i], ...c }; else db.cats.push({ id: uuid(), sort: db.cats.length + 1, ...c }); save(); },
     async deleteCat(id) { db.cats = db.cats.filter((x) => x.id !== id); save(); },
-    async createTask(task, assignees) { const id = uuid(); db.tasks.unshift({ id, created_at: new Date().toISOString(), ...task }); assignees.forEach((m) => db.taskAssignees.push({ task_id: id, member_id: m, status: "assigned", seen_at: null, done_at: null, due_override: null, ext_status: null, ext_date: null, ext_note: null })); save(); },
+    async savePrefs(p) { db.prefs = db.prefs.filter((x) => x.member_id !== p.member_id); db.prefs.push({ ...p, updated_at: new Date().toISOString() }); save(); },
+    async createTask(task, assignees) { if (!assignees || !assignees.length) throw new Error("A task needs at least one person assigned"); if (task.id && db.tasks.some((x) => x.id === task.id)) return; const id = task.id || uuid(); db.tasks.unshift({ created_at: new Date().toISOString(), ...task, id }); assignees.forEach((m) => db.taskAssignees.push({ task_id: id, member_id: m, status: "assigned", seen_at: null, done_at: null, due_override: null, ext_status: null, ext_date: null, ext_note: null })); save(); },
     async updateTask(id, fields) { const t = db.tasks.find((x) => x.id === id); if (t) Object.assign(t, fields); save(); },
     async deleteTask(id) { db.tasks = db.tasks.filter((x) => x.id !== id); db.taskAssignees = db.taskAssignees.filter((x) => x.task_id !== id); save(); },
     async setTaskStatus(task_id, member_id, status) { const a = db.taskAssignees.find((x) => x.task_id === task_id && x.member_id === member_id); if (!a) return; a.status = status; if (status === "seen") a.seen_at = new Date().toISOString(); a.done_at = status === "done" ? new Date().toISOString() : null; save(); },
